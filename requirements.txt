@@ -1,0 +1,6 @@
+openai==3.42.0
+pandas==3.1.0
+pypdf==6.21.4
+python-dotenv==1.2.4
+holidays==0.107
+pytest==9.2.0

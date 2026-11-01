@@ -1,0 +1,22 @@
+# Secrets and local config
+.env
+
+# Runtime output
+logs/
+handoffs.jsonl
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Planning notes (Portuguese, internal). A clean English version may live in docs/ai_workflow.md.
+CLAUDE.md
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
