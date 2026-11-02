@@ -117,3 +117,18 @@ def test_invalid_reference_date_flag_is_friendly(monkeypatch, capsys):
     monkeypatch.setattr(cli, "load_settings", lambda: Settings("k", None, "m", None))
     assert cli.main(["--reference-date", "amanhã"]) == 1
     assert "REFERENCE_DATE" in capsys.readouterr().err
+
+
+def test_status_line_is_shown_once_per_tool_per_turn():
+    lines = []
+    status = cli.StatusPrinter("Tom", write=lines.append)
+    for _ in range(8):
+        status("get_product_details")
+    status("get_policy")
+    status.reset()
+    status("get_product_details")
+    assert lines == [
+        "🎵 Tom está consultando o produto...",
+        "🎵 Tom está consultando as políticas da loja...",
+        "🎵 Tom está consultando o produto...",
+    ]

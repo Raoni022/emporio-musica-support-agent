@@ -35,6 +35,24 @@ def tool_status(name: str, assistant_name: str) -> str:
     return f"🎵 {assistant_name} está {TOOL_STATUS_MESSAGES.get(name, 'consultando o sistema')}..."
 
 
+class StatusPrinter:
+    """Prints one status line per tool, once per turn (the model may call the same
+    tool several times in parallel, e.g. eight product lookups)."""
+
+    def __init__(self, assistant_name: str, write: Callable[[str], None] = print):
+        self.assistant_name = assistant_name
+        self.write = write
+        self.shown: set[str] = set()
+
+    def reset(self) -> None:
+        self.shown.clear()
+
+    def __call__(self, tool: str) -> None:
+        if tool not in self.shown:
+            self.shown.add(tool)
+            self.write(tool_status(tool, self.assistant_name))
+
+
 def debug_report(turn: TurnResult, model: str) -> str:
     lines = [f"  ┌ debug: {turn.iterations} LLM call(s), {turn.prompt_tokens}+"
              f"{turn.completion_tokens} tokens, {turn.latency_ms} ms"]
@@ -60,6 +78,7 @@ def chat(
     debug: bool = False,
     read: Callable[[str], str] = input,
     write: Callable[[str], None] = print,
+    status: StatusPrinter | None = None,
 ) -> None:
     name = agent.settings.assistant_name
     while True:
@@ -77,6 +96,8 @@ def chat(
             tracer.session_id = uuid.uuid4().hex[:8]
             write("(conversa reiniciada)\n")
             continue
+        if status:
+            status.reset()
         turn = agent.respond(message)
         tracer.record(turn, message, agent.settings.now())
         if debug:
@@ -111,8 +132,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Erro ao iniciar: {exc}", file=sys.stderr)
         return 1
 
-    agent = Agent(OpenAIClient(settings), store, manual, settings,
-                  on_tool=lambda tool: print(tool_status(tool, settings.assistant_name)))
+    status = StatusPrinter(settings.assistant_name)
+    agent = Agent(OpenAIClient(settings), store, manual, settings, on_tool=status)
     tracer = Tracer(settings.logs_dir / "traces.jsonl", uuid.uuid4().hex[:8], settings.model)
 
     now = settings.now()
@@ -121,7 +142,7 @@ def main(argv: list[str] | None = None) -> int:
           f"(modelo {settings.model})")
     print(f"   Data de referência ({reference}): {now:%d/%m/%Y %H:%M}. "
           "Comandos: /reset recomeça, /quit sai.\n")
-    chat(agent, tracer, debug=args.debug)
+    chat(agent, tracer, debug=args.debug, status=status)
     return 0
 
 
