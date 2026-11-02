@@ -81,6 +81,20 @@ customer message
 
 ### Guardrails
 
+Principle (OWASP LLM01, prompt injection): **the prompt can be talked out of its rules, the code cannot.** Real protection lives in the tools; the prompt is the weakest layer.
+
+| Layer | Protects against | Implementation |
+|---|---|---|
+| Input | Abuse, huge messages | 2,000-character limit, fixed reply without calling the LLM |
+| Prompt | Off-topic requests, role changes | Scope and security rules in `prompts.py` |
+| Tools | Data leaks, unintended actions | Identity checked inside the tools; enums in arguments; read-only data; no tool returns another customer's data; `register_handoff` only appends to a queue and computes `identity_verified` itself |
+| **Output** | Hallucinated prices | `guardrails.validate_response`: every `R$` value in the answer must appear (within 5 cents) in the session's tool results or tool arguments, or in the customer's own messages. If not, the model gets one warning and rewrites; if it fails again, the customer gets a fixed answer without values and an offer of an attendant. The trace records `guardrail_triggered` and the values |
+| Human | Decisions the agent should not make | `register_handoff` |
+
+The output check is deterministic (a regex and a set lookup), so it adds no LLM call when the answer is grounded. Values are accepted from **earlier turns of the same session** too, not only the current one: a follow-up such as "so it's under R$ 2.000?" legitimately repeats a price the tools returned before. In a real run with five price-heavy questions (about 20 values) it triggered no false positives.
+
+What it does not catch: a value that exists in the tool results but belongs to another product (the installment bug found in the first real run quoted a real tool value). That class of error is handled in the tools themselves (`calculate_installments` looks up the product's price) and measured by the eval.
+
 ### Evaluation
 
 ### Retrieval architecture
@@ -155,6 +169,7 @@ Principle: a rule that can be **computed or verified lives in code**; an informa
 | Who gets handed to a human, and what the attendant receives | Code | `register_handoff` (reasons enum, verified identity, tools consulted) | pytest |
 | When to consult data vs. policies | Tool descriptions + prompt | `tool_schemas.py`, `prompts.py` | eval |
 | Persona, tone, flow, scope, handoff, security | Prompt | `prompts.py` | examples + eval |
+| Every R$ value in an answer comes from the tools | Code | `guardrails.validate_response`, called by the agent loop | pytest |
 | Policy text (returns, warranty, privacy...) and which contact to use | Manual | `get_policy` (`text` + `notes`) | pytest |
 
 ## 6. Example conversations

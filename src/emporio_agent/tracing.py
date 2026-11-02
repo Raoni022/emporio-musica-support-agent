@@ -101,6 +101,8 @@ def build_trace(
         "estimated_cost_usd": estimate_cost(model, turn.prompt_tokens, turn.completion_tokens),
         "latency_ms": turn.latency_ms,
         "error_type": turn.error_type,
+        "guardrail_triggered": turn.guardrail_triggered,
+        "unverified_values": turn.unverified_values,
         "resolved": turn.error_type is None and not handoff_unanswered,
         "final_response": turn.answer,
     })

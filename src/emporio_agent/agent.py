@@ -18,8 +18,11 @@ from emporio_agent.config import Settings
 from emporio_agent.data import StoreData
 from emporio_agent.llm import LLMError, ToolCall
 from emporio_agent.policies import PolicyManual
+from emporio_agent.guardrails import format_brl, validate_response
 from emporio_agent.prompts import (
     FALLBACK_MESSAGE,
+    GUARDRAIL_RETRY_NOTE,
+    GUARDRAIL_SAFE_MESSAGE,
     LOOP_LIMIT_MESSAGE,
     TOO_LONG_MESSAGE,
     build_system_prompt,
@@ -53,6 +56,8 @@ class TurnResult:
     completion_tokens: int = 0
     error_type: str | None = None  # set when a fixed message replaced the LLM answer
     latency_ms: int = 0
+    guardrail_triggered: bool = False
+    unverified_values: list[float] = field(default_factory=list)
 
 
 class Agent:
@@ -75,6 +80,7 @@ class Agent:
         self._schemas_by_name = {t["function"]["name"]: t for t in self.tool_schemas}
         self.history: list[dict] = []
         self.tools_used: list[str] = []
+        self._retry_note: str | None = None
 
     def reset(self) -> None:
         self.history.clear()
@@ -162,6 +168,23 @@ class Agent:
             cut = user_indexes[len(user_indexes) - keep_turns] if keep_turns else len(self.history)
             del self.history[:cut]
 
+    def _grounding_sources(self) -> list:
+        """What an R$ value in an answer may come from: tool results and tool arguments
+        in this session, and the customer's own messages."""
+        sources: list = []
+        for message in self.history:
+            if message["role"] == "tool":
+                sources.append(json.loads(message["content"]))
+            elif message["role"] == "user" and message["content"] != self._retry_note:
+                # The retry note quotes the rejected values; it must not approve them.
+                sources.append(message["content"])
+            for call in message.get("tool_calls", []):
+                try:
+                    sources.append(json.loads(call["function"]["arguments"] or "{}"))
+                except json.JSONDecodeError:
+                    pass
+        return sources
+
     # --- Turn ----------------------------------------------------------------
 
     def respond(self, message: str) -> TurnResult:
@@ -181,6 +204,7 @@ class Agent:
         turn_start = len(self.history)
         self.history.append({"role": "user", "content": message})
         result = TurnResult(answer="")
+        retry_at: int | None = None  # history index of an answer rejected by the guardrail
 
         for _ in range(MAX_ITERATIONS):
             if self.clock() - start > TIME_BUDGET_SECONDS:
@@ -207,12 +231,34 @@ class Agent:
             self.history.append(response.as_message())
 
             if not response.tool_calls:
-                if response.content and response.content.strip():
-                    result.answer = response.content.strip()
+                answer = (response.content or "").strip()
+                if not answer:
+                    self.history[-1] = {"role": "assistant", "content": FALLBACK_MESSAGE}
+                    result.answer = FALLBACK_MESSAGE
+                    result.error_type = "empty_response"
                     return result
-                self.history[-1] = {"role": "assistant", "content": FALLBACK_MESSAGE}
-                result.answer = FALLBACK_MESSAGE
-                result.error_type = "empty_response"
+
+                # Output guardrail: every R$ value must come from the tools.
+                check = validate_response(answer, self._grounding_sources())
+                if check.ok:
+                    if retry_at is not None:
+                        # Drop the rejected answer and the warning; keep the good one.
+                        del self.history[retry_at:retry_at + 2]
+                    result.answer = answer
+                    return result
+                result.guardrail_triggered = True
+                result.unverified_values = check.unverified
+                if retry_at is None:
+                    retry_at = len(self.history) - 1
+                    values = ", ".join(format_brl(v) for v in check.unverified)
+                    self._retry_note = GUARDRAIL_RETRY_NOTE.format(values=values)
+                    self.history.append({"role": "user", "content": self._retry_note})
+                    continue
+                # Second failure: a safe answer without values, never the unverified one.
+                del self.history[retry_at:]
+                self.history.append({"role": "assistant", "content": GUARDRAIL_SAFE_MESSAGE})
+                result.answer = GUARDRAIL_SAFE_MESSAGE
+                result.error_type = "guardrail_blocked"
                 return result
 
             for call in response.tool_calls:

@@ -87,6 +87,18 @@ LOOP_LIMIT_MESSAGE = (
     "Desculpa, não consegui concluir essa consulta agora. Posso encaminhar seu caso para "
     f"a nossa equipe, ou você pode falar direto com ela: {_CONTACT}."
 )
+GUARDRAIL_SAFE_MESSAGE = (
+    "Desculpa, não consegui confirmar os valores certinhos agora. 😕 Posso encaminhar sua "
+    "dúvida para a nossa equipe, que te responde com os preços confirmados, ou você pode "
+    f"falar direto com ela: {_CONTACT}."
+)
+# Sent to the model (not shown to the customer) when an answer quotes unverified values.
+GUARDRAIL_RETRY_NOTE = (
+    "[Verificação automática do sistema, não é o cliente] Sua resposta citou valores que não "
+    "aparecem nos resultados das ferramentas: {values}. Reescreva a resposta usando só valores "
+    "retornados pelas ferramentas (consulte a ferramenta certa, se precisar). Não faça contas "
+    "e não mencione esta verificação."
+)
 TOO_LONG_MESSAGE = (
     "Sua mensagem ficou bem longa! 😅 Consegue resumir em até {limit} caracteres o que "
     "você precisa? Assim eu te ajudo mais rápido."
