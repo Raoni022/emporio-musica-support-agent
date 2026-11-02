@@ -2,11 +2,58 @@
 
 Prototype of a text-based customer support agent for Empório da Música, a fictional musical instrument store in Campo Grande/MS (Brazil). Built in Python for the Artefact AI Engineer technical case.
 
-> Work in progress. Sections below are filled in as each step is implemented.
-
 ## 1. Overview
 
+**Tom** (a play on a song's *tom*, its key) is the store's virtual assistant. It talks to customers in Portuguese, in the informal-but-professional tone the store's manual asks for, and answers from the store's own data and policy manual instead of from memory:
+
+```
+Cliente: E o Crafter HT-100? Quanto fica no PIX? E em 10x?
+  🎵 Tom está consultando o produto...
+  🎵 Tom está calculando o parcelamento...
+Tom: O Crafter HT-100 Folk Aço Natural está em promoção: de R$ 2.399,00 por R$ 1.967,18
+     (18% de desconto). No PIX o preço é o mesmo da promoção, R$ 1.967,18.
+     Parcelado em 10x sem juros, fica 10x de R$ 196,72.
+```
+
+(from [example 02](examples/02_price_payment_promotion.md); the promotion, the rule that PIX does not stack on it, and the installments all come from tools.)
+
+How it works, in one paragraph: a plain function-calling loop (ReAct style, no framework) gives the model 11 deterministic tools over the store's CSVs and its policy manual, split into its 10 numbered sections. Every price, date and rule that can be computed is computed in code; the prompt holds only persona and behavior. A deterministic guardrail checks that every `R$` value in an answer came from a tool before the customer reads it, and every turn leaves one masked trace line.
+
+| Measured on this prototype (`gpt-4.1-mini`) | Result |
+|---|---|
+| Golden dataset (20 cases, deterministic checks) | **20/20** in the last run; 79/80 over four runs ([evals/last_run.md](evals/last_run.md)) |
+| Average cost per customer message | ~US$ 0.0016 |
+| Median latency per customer message | ~2.2 s |
+| Output guardrail triggers in the eval | 0 |
+| Unit tests (no LLM) | 279 passing |
+
 ## 1b. Problem & scope
+
+**Problem.** The store's team answers every message by hand and is overloaded with recurring questions: opening hours, order status, price and availability, plus returns and payment rules. The goal is **first-level support** for those questions, with a structured handoff to the team for everything else.
+
+**What Tom does**
+
+- answers product, price, promotion, PIX and installment questions from the data, never from memory;
+- answers policy questions (returns, warranty, shipping, payment, privacy, hours, address) from the manual's own sections;
+- looks up an order and applies the return policy to it, only after checking that the contact belongs to that order's customer;
+- **takes action, not only answers:** it registers a structured handoff for the team (`handoffs.jsonl`) with the reason, a summary, whether identity was verified, the order, the tools already consulted and a suggested next step, so the attendant does not start the conversation over;
+- declines out-of-scope requests (accessories, unrelated topics) and ignores attempts to change its role.
+
+**What Tom does not do, on purpose**
+
+- it does not sell, reserve stock or take payments (the manual describes no checkout flow): it summarizes and hands off;
+- it does not judge whether a product is defective: that goes to a human;
+- it does not keep conversations across sessions (identity, LGPD, security; see "History" in section 2).
+
+**Out of scope for this text agent, with the evolution path**
+
+| Out of scope | Next step |
+|---|---|
+| Audio messages | Transcription (e.g. Whisper) in front of the agent; the agent itself does not change |
+| Images and documents (e.g. a photo of a damaged product) | Attached to the handoff for a human; the agent does not judge damage |
+| Real integrations (ERP, helpdesk, WhatsApp) | Simulated by the CSVs and the handoff queue; the tools are the integration point (section 9) |
+
+**Updating data and policies.** CSVs and the PDF are loaded at startup: after an update, restart. The manual's version ("Versão 2.1 — Junho de 2025") is extracted and returned with every `get_policy` call, and the trace records which version each answer used. If the manual can no longer be split into its 10 numbered sections, the program refuses to start instead of running with a policy missing.
 
 ## 2. How to run
 
@@ -29,7 +76,7 @@ python scripts/data_quality.py      # regenerates docs/data_quality.md
 
 In the chat, `/reset` starts a new session and `/quit` exits. While a tool runs, a status line shows what Tom is doing (`🎵 Tom está consultando o catálogo...`).
 
-**Why status lines instead of token streaming:** the final answer is not streamed, because it will be checked by the output guardrail (prices must come from the tools) before the customer reads it. The status line keeps the wait visible without showing an unchecked answer.
+**Why status lines instead of token streaming:** the final answer is not streamed, because it is checked by the output guardrail (prices must come from the tools) before the customer reads it. The status line keeps the wait visible without showing an unchecked answer.
 
 **History:** kept within a session (the customer often sends the order number in one message and the e-mail in the next), never across sessions, on purpose: the CLI has no stable customer identity, storing conversations means storing personal data (LGPD), and identity verification should not carry over from one session to another. In production: history per phone number with a TTL, and verification again in each session.
 
@@ -65,19 +112,59 @@ customer message
                          └─ handoffs.jsonl  queue for the human team
       │
       ▼  no more tool calls
- answer  (or a fixed fallback message on any failure)
+ output guardrail: every R$ value must come from the tools ── miss ──► one retry, then a safe answer
+      │
+      ▼
+ answer  (or a fixed fallback message on any failure)  ──► trace line (logs/traces.jsonl)
 ```
 
 - **`agent.py`**: the loop (decide → act → observe), at most 5 LLM calls and ~60 s per customer message. All tool calls in one model response run before the next LLM call.
+- **`tools.py`**: the 11 business tools as plain functions over the loaded data; every computed or verifiable rule lives here (prices, PIX, installments, identity, return windows, shipping, hours).
+- **`guardrails.py`**: the deterministic output check. **`tracing.py`**: one masked JSON line per turn.
 - **`llm.py`**: the only module that imports `openai`; timeouts and retries come from the SDK. `FakeLLM` replays scripted responses so the loop is tested without an API.
 - **`tool_schemas.py`**: strict JSON schemas; each description says *when* to use the tool. The category enum is built from the data.
 - **`prompts.py`**: persona and behavior only, plus the fixed fallback messages.
 
 ## 4. Technical decisions and why
 
+| Decision | Choice | Why |
+|---|---|---|
+| Approach | **Hybrid**: function calling over deterministic tools (data) + section-level retrieval of the manual through a tool (policies), in a ReAct-style loop (decide → act → observe), **no framework** | The loop is one file of under 300 lines including failure handling and the output check, transparent and easy to debug. LangChain/LangGraph add nothing at this size; LangGraph is the next step when stateful human handoff and multi-step flows appear (section 9) |
+| Structured data | Deterministic tools over the CSVs (pandas) | Price, stock and orders need exactness, and the manual forbids giving prices or stock without checking the system (7.1). The LLM never computes or invents a value |
+| Policies | **`get_policy(topic)`** over the manual split by its 10 numbered sections, no embeddings | The brief evaluates whether the agent knows **when** to consult policies: as a tool call that decision is explicit, visible in the trace and measurable in the eval. Splitting by the manual's own headings is deterministic, with no risk of retrieving the wrong passage |
+| Observability | Local JSONL trace per turn, with e-mails and phones masked | Tools, arguments, latency, errors, tokens and estimated cost without an external service; the base for the eval (section 7) |
+| LLM | OpenAI `gpt-4.1-mini` by default, configurable in `.env` | Cheap (~US$ 0.0016 per message here), reliable function calling with strict schemas. Through `OPENAI_BASE_URL` any OpenAI-compatible provider runs without code changes, paid or free, local or remote |
+| Interface | CLI, with `--debug` | The focus is the agent; `--debug` shows every tool call and result, which helps whoever evaluates it |
+| History | Within a session: yes. Across sessions: no, on purpose | See "History" in section 2 |
+
 ### Decisions vs. the options in the brief
 
+| Item in the brief | Options mentioned | Choice and why |
+|---|---|---|
+| Framework / approach | RAG, function calling, ReAct, SQL agent, hybrid | **Hybrid.** Function calling for data (exactness); section retrieval for policies (the manual is already structured, embeddings would be overkill); the loop is ReAct in practice. **SQL agent rejected:** the LLM could query the customers table without verification (LGPD) and write wrong queries. **Embedding RAG rejected:** 8 pages, and the risk of retrieving the wrong section |
+| Model and provider | Paid or free, local or via API | Small OpenAI model by default; `OPENAI_BASE_URL` opens free and local options without code changes. Only OpenAI was tested end to end (section 2) |
+| Interface | CLI, notebook, API, simple UI | CLI. A notebook does not represent a real conversation |
+| Conversation history | "if it makes sense for the user" | In the session, yes; across sessions, no (identity, LGPD, security) |
+| Data handling | "whatever you find necessary" | Normalization at load time, raw files untouched, business facts never "fixed", a data quality report for the store (section 5) |
+| Constraint: Python | — | Everything is Python |
+
 ### Alternatives considered
+
+- **Everything in the context (long context)**: the LLM would do the PIX, installment and date math, cost more per message, and the "when to consult" decision would be invisible.
+- **Router + fixed flows**: breaks on mixed questions ("how much is it and how many installments?").
+- **State machine / LangGraph**: identity verification is already enforced inside the tools; a graph adds structure without a problem to solve yet.
+- **Multi-agent / orchestrator-workers**: overkill for 11 tools and short conversations.
+- **Embedding RAG for everything**: bad at exact filters (price, stock, string type). Evolution: semantic search over descriptions combined with the structured filters.
+- **SQL agent with restricted views**: still writes wrong queries; tools are a smaller, testable surface.
+- **Off-the-shelf agent frameworks** (OpenAI Agents SDK, PydanticAI): one more abstraction for a loop this small.
+- **Plan-and-execute**: messages need one or two tools, so planning adds an LLM call; parallel tool calls already cut round trips.
+- **Prompt chaining**: a rigid pipeline breaks on mixed questions.
+- **Reasoning models**: slower and more expensive, and they still need tools to reach the data (they also reject the low temperature used here).
+- **LLM self-correction on every answer**: doubles latency; the deterministic price check covers the critical risk.
+- **LLM-as-a-judge**: useful offline in the eval for tone and policy adherence (next step), never in the response path.
+- **Episodic or semantic memory across sessions**: means storing personal data; belongs in production with consent and retention rules.
+- **Fine-tuning**: no data to train on, and the rules change with the manual.
+- **GraphRAG**: the relations are joins between six small tables.
 
 ### Guardrails
 
@@ -119,9 +206,35 @@ What the iterations showed:
 
 ### Retrieval architecture
 
+Two kinds of retrieval, chosen by what the question needs:
+
+- **Structured data → deterministic tools.** The CSVs are loaded once and normalized (`data.py`); tools filter and join them in pandas (`search_products`, `get_product_details`, `get_order_status`...). Matching is accent- and plural-insensitive, tolerant to separators and typos in product names, and carries Portuguese terms derived from the specs ("clássico" for nylon strings). Results are capped at 8 with the total count, so the agent never silently drops options.
+- **Policies → section retrieval.** `policies.py` rebuilds the PDF text, removes page headers and footers, and splits it on the 10 expected headings, searched in order (so a numbered list inside section 7 cannot be mistaken for a heading). `get_policy(topic)` returns one section with the manual's version and, where the manual contradicts itself, `notes` saying which value to use. No embeddings: the manual is 8 pages with its own numbered structure.
+
+The choice between the two is the model's, guided by the tool descriptions, and it is visible in every trace line and checked by the eval (`expected_tools`).
+
 ### Prompt strategy
 
+- **Short and behavioral only**: persona and tone (manual 7.1), the service flow (7.2), scope, privacy and security rules, and when to hand off (`prompts.py`). Business rules are not repeated in the prompt: the code enforces them.
+- **Current store time injected every turn** (weekday, date, time in Campo Grande), so "are you open now?" and date windows are consistent.
+- **"When to use" lives in each tool's description**, next to its schema, not in the prompt.
+- **Instructions next to the data.** Where the eval showed a rule being followed inconsistently, the tool result itself carries it: an `instruction` field (say the total of a truncated search, show the alternatives), ready-made `display` text for promotions, `deadline_display` for return windows (section 4, Evaluation).
+- **Portuguese**, because the agent talks to Brazilian customers (the code, docs and tool results are in English).
+- **Low temperature (0.2)** for consistency; strict tool schemas so arguments always follow the schema.
+
 ### Data used (and not used)
+
+The brief says not all data has to be used. What the agent sees, per file:
+
+| File | Used for | Left out, on purpose |
+|---|---|---|
+| `products.csv` | Catalog search and details: name, category, price, stock, status, normalized specs | `description` in Baixos, Baterias and Teclados (contradicts name and specs); the raw `strings` field (ambiguous); `created_at` |
+| `categories.csv` | Category names (also the enum in the search schema) and the category list | — |
+| `promotions.csv` | Active promotions only (`is_active = 1`), largest discount per product | Inactive promotions (shown to nobody; only reported if duplicated) |
+| `orders.csv` | Order status, dates, recorded total, payment method, tracking, notes, delays, return windows | — |
+| `order_items.csv` | Item names and quantities in an order | — |
+| `customers.csv` | **Only** to verify that a contact belongs to an order's customer, and the first name for the greeting after verification | E-mail, phone, full name and city are never sent to the LLM |
+| `políticas_da_loja.pdf` | The 10 sections through `get_policy`, the version, the official contact | The cover's marketing text |
 
 ## 5. Data issues and assumptions
 
@@ -158,7 +271,7 @@ The full diagnosis, written as a report to hand back to the store, is in [docs/d
 | Section 4.3 gives 7 days for preference exchanges without saying from when | Counted from receipt, like the regret window |
 | Section 4.1 is titled "Compras Online"; the data does not say where each order was placed | All orders in the data are treated as online orders |
 | Returns before delivery (pending, confirmed, shipped) | Not covered by the manual (order 17 shows cancellations do happen): the tool returns `requires_human` and the agent offers a handoff |
-| 4.4 exclusions (customized instruments, "final sale" items, mouthpieces) are not marked in the data | The tool always returns them and the agent asks the customer instead of assuming |
+| 4.4 exclusions (customized instruments, "final sale" items, mouthpieces) are not marked in the data | The tool always returns them so the agent asks instead of assuming; in practice it does not always ask (see section 8) |
 | "Região metropolitana de Campo Grande" is not defined in the manual | Only the city of Campo Grande gets the local rules |
 | Free local shipping "acima de R$ 500,00" and a fee "abaixo de R$ 500,00": exactly R$ 500 is in neither | Strictly above R$ 500 is free; R$ 500 or less pays R$ 35 |
 | Which products count as "large" (acoustic drums, digital pianos, double basses) | Acoustic drum kits in Baterias, pianos in Teclados, double basses in Cordas Orquestrais. Electric basses ship normally, even though some descriptions call them "contrabaixo" |
@@ -237,6 +350,8 @@ Example line (formatted):
   "estimated_cost_usd": 0.00092,
   "latency_ms": 2300,
   "error_type": null,
+  "guardrail_triggered": false,
+  "unverified_values": [],
   "resolved": true,
   "final_response": "Achei seu pedido, Isabela!"
 }
@@ -265,7 +380,37 @@ After an LLM failure, the partial tool exchange of that turn is dropped from his
 - **Return exclusions are not always raised.** `check_return_eligibility` always returns the section 4.4 exclusions (customized instruments, "final sale" items, mouthpieces), which the data does not mark, but the agent does not always ask the customer about them (it did not in example 03). Next step: an `instruction` next to the data, as for the other rules, plus an eval case.
 - **Redundant tool calls.** Asked "is any of these on sale?" right after a search, the model still looks up each product one by one (8 calls), although the search results already carry the promotion. The answer is right, but the turn costs about twice as much. Next step: an eval case that checks the number of calls, then either a tool that answers about several products at once or a per-turn call budget.
 - **Order verification can be guessed by brute force.** Order numbers are sequential and there is no limit on failed attempts per session. In production: lock or slow down after a few failures per phone number, and alert on many failures.
+- **Only one provider tested end to end.** Everything was run with OpenAI `gpt-4.1-mini`. Other OpenAI-compatible providers (including a free one, which the plan called for) work through `OPENAI_BASE_URL` but were not run; small local models are expected to choose tools worse. Next step: run the same eval per provider and publish the table.
+- **The eval is small and text-based.** 20 cases with deterministic text checks catch wrong values and missing steps, not tone or a subtly misleading sentence, and a single run is noisy (section 4, Evaluation). Next step: grow it with real conversations, run each case several times, and add an offline LLM judge for tone and policy adherence.
+- **Dates rely on estimates.** There is no actual delivery date in the data, so return windows count from `estimated_delivery` (the tool tells the agent to confirm with the customer). Campo Grande's municipal holidays are not in the calendar.
+- **The manual split depends on its exact headings.** If the store renames a section, the program refuses to start (by design) until the heading table in `policies.py` is updated.
+- **Data is loaded at startup.** Updating a CSV or the manual means restarting; `handoffs.jsonl` is a local file without locking, fine for one CLI process only.
 
 ## 9. Path to production
 
+The central argument: **the tools are a stable contract.** The agent only knows `search_products`, `get_order_status`, `get_policy` and the others, with their schemas. Replacing the CSVs with the ERP's API, or the PDF with a new manual version, changes what is behind the tools, not the agent, the prompt or the eval.
+
+- **Pilot.** A WhatsApp Business webhook (FastAPI) in front of the same agent; history persisted per phone number (Postgres or Redis) with a TTL and verification again in each session; handoffs into the real helpdesk instead of a file. **Migrate the loop to LangGraph when the handoff becomes stateful** (an attendant takes over and hands back, or flows span several steps such as an exchange that waits for a photo): that is the trigger, not before. A web panel for the team (e.g. with the Vercel AI SDK) and the same tools exposed over MCP for other clients.
+- **Quality loop.** The eval grows with real conversations and runs in CI before any change to the prompt, the tools or the model; several runs per case; an offline LLM judge for tone and policy adherence; traces sent to Langfuse or OpenTelemetry.
+- **Data.** Tools call the real systems: a short cache only for the catalog, never long caches for stock, price or orders. The manual has an owner (management) and a version; each new version runs through the eval before going live. Promotions get start and end dates instead of only `is_active`.
+- **Resilience and cost.** Rate limit per phone number at the gateway, a message queue, a daily cost ceiling, error-rate alerts, a circuit breaker and a fallback model.
+- **Business metrics.** Share of conversations resolved without a human, handoffs by reason, cost per conversation, response time (the manual's target is ≤ 5 minutes), customer satisfaction.
+- **Governance.** Log retention and masking (LGPD), consent before storing conversations, prompt-injection tests in the eval, model changes gated by the eval.
+
 ## 10. Use of AI coding assistants
+
+> Drafted with Claude Code from the actual session, then reviewed and adjusted by me.
+
+I used two assistants, with different roles:
+
+1. **Planning with Claude (chat).** I reviewed the case and the data, and wrote the specification by questioning each part of the design: architecture, where each business rule lives, failure handling, data handling, scope. The spec changed at every round; [docs/decision_log.md](docs/decision_log.md) records each question, what changed and why. The spec itself (`CLAUDE.md`, in Portuguese with planning notes) is kept out of the repository.
+2. **Implementation with Claude Code**, following that spec one step at a time (the commit plan is the history of this repository). At the end of each step it ran `pytest`, showed the result and proposed the commit message; I reviewed the code, ran it and made every commit myself. Commits carry a `Co-Authored-By` trailer.
+
+What I decided and checked, not the assistant:
+
+- the architecture, the business rules and every assumption in section 5. When Claude Code made a choice the spec did not cover, it had to flag it, I validated it by committing or objected before committing, and it went into the README in the same commit;
+- testing it myself, which mattered most: my own CLI session and the first real runs found bugs that 200+ unit tests with a fake LLM could not (an empty `OPENAI_BASE_URL`, an old API key in my system environment overriding `.env`, installments computed with the previous product's price, a search that told a customer there were no classical guitars). Each became its own `fix:` commit;
+- the eval as the measure for every behavior fix, reported with its failing runs and not only the final 20/20;
+- these documents and the example conversations, which are single unedited runs.
+
+The decision log's "Implementation" section lists the points where I questioned or changed what was generated.
