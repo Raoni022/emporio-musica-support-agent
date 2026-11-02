@@ -414,7 +414,7 @@ What I decided and checked, not the assistant:
 
 - the architecture, the business rules and every assumption in section 5. When Claude Code made a choice the spec did not cover, it had to flag it, I validated it by committing or objected before committing, and it went into the README in the same commit;
 - testing it myself, which mattered most: my own CLI session and the first real runs found bugs that 200+ unit tests with a fake LLM could not (an empty `OPENAI_BASE_URL`, an old API key in my system environment overriding `.env`, installments computed with the previous product's price, a search that told a customer there were no classical guitars). Each became its own `fix:` commit;
-- the eval as the measure for every behavior fix, reported with its failing runs and not only the final 20/20;
+- the eval as the measure for every behavior fix, reported with its failing runs and not only the best one (80/81 over the last three runs of 27 cases);
 - these documents and the example conversations, which are single unedited runs.
 
 The decision log's "Implementation" section lists the points where I questioned or changed what was generated.
