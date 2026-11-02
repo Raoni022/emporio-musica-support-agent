@@ -79,3 +79,8 @@ Claude Code implemented the spec one step per commit; I reviewed each step, ran 
 **18. Eval-driven fixes.**
 - The first eval run scored 17/20; prompt-only fixes went to 16/20 with different failures. Instructions placed inside the tool results (next to the data) made the behavior stable: 20/20 in the last run, 79/80 over four runs.
 - Not fixed, documented as limitations: the redundant per-product lookups, and the 4.4 return exclusions not always being raised.
+
+**19. "Give me interesting questions to challenge the agent."**
+- My own CLI sessions with tricky questions found 8 problems the eval did not cover: two products in 6x answered as impossible, "PIX in 3x" accepted, saxophones implied for an empty category, return rules answered from memory, invented Black Friday dates and an offer to notify me later, a cancellation registered without verification, and an English question answered in Portuguese.
+- Changed: installments for several products computed in code; manual notes pointing to the right section; prompt rules for catalog and policy checks; language detected in code per turn. Each problem became an eval case (20 → 27 cases, above the 15–20 planned), with 80/81 over the last three runs.
+- Why: the eval only measures what it contains. Testing it like a customer would was what found these.

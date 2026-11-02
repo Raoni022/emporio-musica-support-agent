@@ -124,3 +124,27 @@ def test_inactive_promotions_are_not_listed(store):
 def test_money_rounds_half_up(value, expected):
     # Plain round() gives 0.12, 2.67 and 1.0 for these.
     assert money(value) == expected
+
+
+# --- Real CLI session: two products, and "PIX in installments" -----------------
+
+
+def test_installments_for_several_products_add_their_final_prices(store):
+    # Real run: the agent computed each ukulele separately and said 6x was not
+    # possible for both together. 439,20 + 323,10 = 762,30, so 6x of 127,05.
+    result = calculate_installments(store=store, products=["Ohana CK-20", "Kalani KAL-700T"])
+    assert result["amount"] == 762.3
+    assert len(result["price_basis"]["items"]) == 2
+    options = {o["installments"]: o["installment_value"] for o in result["options"]}
+    assert options[6] == 127.05
+
+
+def test_unknown_product_in_a_list_is_reported(store):
+    result = calculate_installments(store=store, products=["Ohana CK-20", "Fender Precision"])
+    assert "error" in result and result["product_query"] == "Fender Precision"
+
+
+def test_installment_notes_say_credit_only_and_what_combining_means():
+    notes = " ".join(calculate_installments(1000)["notes"])
+    assert "credit card only" in notes
+    assert "nothing to do with buying several products" in notes

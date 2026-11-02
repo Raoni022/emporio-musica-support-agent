@@ -110,7 +110,7 @@ def test_get_policy_returns_section_with_version(manual):
     assert result["section"] == 4
     assert result["version"] == "Versão 2.1 — Junho de 2025"
     assert result["text"].startswith("4. Política de Trocas e Devoluções")
-    assert result["notes"] == []
+    assert get_policy(manual, "warranty")["notes"] == []
 
 
 def test_every_topic_is_reachable(manual):
@@ -128,3 +128,8 @@ def test_unknown_topic_returns_structured_error(manual):
     assert "error" in result
     assert result["retryable"] is False
     assert "returns_and_exchanges" in result["valid_topics"]
+
+
+def test_returns_section_points_damaged_deliveries_to_shipping(manual):
+    notes = " ".join(get_policy(manual, "returns_and_exchanges")["notes"])
+    assert "recusar o recebimento" in notes and "5.2" in notes

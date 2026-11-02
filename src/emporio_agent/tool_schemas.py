@@ -81,13 +81,15 @@ def build_tool_schemas(store: StoreData) -> list[dict]:
               "promoções (\"tem alguma promoção?\", \"o que está em oferta?\")."),
         _tool(
             "calculate_installments",
-            "Opções de parcelamento sem juros no cartão, com as parcelas mínimas da loja, e "
-            "se é possível combinar formas de pagamento. Para um produto, passe product "
-            "(nome ou id): a ferramenta busca o preço final sozinha, então pode ser chamada "
-            "junto com get_product_details. Use amount só para outros valores (ex.: soma de "
-            "itens). Nunca calcule parcelas por conta própria.",
+            "Opções de parcelamento sem juros no CARTÃO DE CRÉDITO (PIX, débito e boleto são "
+            "à vista), com as parcelas mínimas da loja. Para um produto, passe product; para "
+            "vários comprados juntos, passe products (lista de nomes): a ferramenta busca e "
+            "soma os preços finais sozinha, então pode ser chamada junto com "
+            "get_product_details. Use amount só para outros valores. Nunca calcule nem some "
+            "valores por conta própria.",
             {
                 "product": _nullable({"type": "string"}),
+                "products": _nullable({"type": "array", "items": {"type": "string"}}),
                 "amount": _nullable({"type": "number"}),
             },
         ),
@@ -132,7 +134,8 @@ def build_tool_schemas(store: StoreData) -> list[dict]:
             "get_policy",
             "Texto de uma seção do manual de políticas da loja. Use antes de responder "
             "qualquer dúvida de regra: endereço e contato (about_and_contact), horários, "
-            "pagamento, trocas, frete, promoções, atendimento, garantia, privacidade.",
+            "pagamento, trocas, frete, promoções, atendimento, garantia, privacidade. Produto "
+            "que chegou avariado na entrega: shipping (seção 5.2), não returns_and_exchanges.",
             {"topic": {"type": "string", "enum": sorted(TOPICS)}},
         ),
         _tool(

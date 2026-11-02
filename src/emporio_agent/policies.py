@@ -49,6 +49,11 @@ SECTION_NOTES = {
         f"O e-mail oficial é {OFFICIAL_EMAIL} (capa do manual). A grafia com acento "
         "na tabela de dados da empresa é um erro de digitação."
     ],
+    4: [
+        "Produto que CHEGOU AVARIADO na entrega não é caso de troca: a seção 5.2 (shipping) "
+        "diz que o cliente deve recusar o recebimento e entrar em contato imediatamente com a "
+        "loja. Se ele já recebeu, encaminhe à equipe."
+    ],
     3: [
         "A tabela cita parcela mínima de R$ 100,00 para o crédito em geral, mas as "
         "regras detalhadas da seção 3.1 prevalecem. Use calculate_installments para "

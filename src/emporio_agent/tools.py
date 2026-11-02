@@ -377,35 +377,51 @@ def _minimum_installment(installments: int) -> float:
     raise ValueError(installments)
 
 
+INSTALLMENT_NOTES = [
+    "Installments are on credit card only. PIX, debit card and boleto are paid in full "
+    "(manual 3); never offer installments on PIX.",
+    "can_combine_payments means combining payment METHODS in one purchase (e.g. PIX + "
+    "card); it has nothing to do with buying several products together.",
+]
+
+
 def calculate_installments(
-    amount: float | None = None, *, store: StoreData | None = None, product: str | None = None
+    amount: float | None = None,
+    *,
+    store: StoreData | None = None,
+    product: str | None = None,
+    products: list[str] | None = None,
 ) -> dict:
     """Interest-free credit card options (manual, section 3.1).
 
-    For a product, the tool looks up the final price itself (promotional when
-    active), so the model never has to know it first: in a real run it called
-    this in parallel with get_product_details and passed the previous product's
-    price. `amount` stays for other values (e.g. two items together).
-    Values are rounded to cents; the card operator may adjust the last
-    installment by a few cents so the total matches the amount exactly.
+    For one or several products, the tool looks up and adds up their final prices
+    itself (promotional when active), so the model never does the math: in real
+    runs it passed the previous product's price, and for two items it computed
+    each one separately and wrongly said they could not be paid together.
+    `amount` stays for other values. Values are rounded to cents; the card
+    operator may adjust the last installment so the total matches exactly.
     """
+    names = list(products or []) + ([product] if product else [])
     basis = None
-    if product is not None:
+    if names:
         if store is None:
-            raise ValueError("store is required to look up a product")
-        found = get_product_details(store, product)
-        if "product" not in found:
-            return found  # error or ambiguous candidates, for the agent to resolve
-        details = found["product"]
-        amount = details["final_price"]
-        basis = {
-            "product": details["name"],
-            "price": details["price"],
-            "promotion": details["promotion"],
-            "final_price": details["final_price"],
-        }
+            raise ValueError("store is required to look up products")
+        items = []
+        for name in names:
+            found = get_product_details(store, name)
+            if "product" not in found:
+                return {**found, "product_query": name}  # error or ambiguous candidates
+            details = found["product"]
+            items.append({
+                "product": details["name"],
+                "price": details["price"],
+                "promotion": details["promotion"],
+                "final_price": details["final_price"],
+            })
+        amount = money(sum(Decimal(str(i["final_price"])) for i in items))
+        basis = items[0] if len(items) == 1 else {"items": items, "total": amount}
     if amount is None or amount <= 0:
-        return _error("Pass a product, or an amount greater than zero.")
+        return _error("Pass one or more products, or an amount greater than zero.")
     amount = money(amount)
     options = []
     for n in range(1, MAX_INSTALLMENTS + 1):
@@ -419,6 +435,7 @@ def calculate_installments(
         "max_installments": options[-1]["installments"],
         "options": options,
         "can_combine_payments": amount > COMBINED_PAYMENT_THRESHOLD,
+        "notes": INSTALLMENT_NOTES,
     }
     if basis:
         result = {"price_basis": basis, **result}

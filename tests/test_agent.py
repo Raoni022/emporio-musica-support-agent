@@ -326,3 +326,27 @@ def test_env_file_wins_over_system_variables(monkeypatch, tmp_path):
     settings = load_settings(env_file=env_file)
     assert settings.api_key == "key-from-dotenv"
     assert settings.model == "gpt-4.1-mini"
+
+
+@pytest.mark.parametrize(
+    "message, language",
+    [
+        ("Hi, do you sell ukuleles under 300 reais?", "en"),
+        ("How much is the Takamine GD20?", "en"),
+        ("Vocês têm ukulele até 300 reais?", "pt"),
+        ("Quanto custa o Takamine GD20?", "pt"),
+        ("oi", "pt"),
+        ("Pedido 7, e-mail leticia.rocha@jmail.com", "pt"),
+    ],
+)
+def test_detect_language(message, language):
+    from emporio_agent.prompts import detect_language
+    assert detect_language(message) == language
+
+
+def test_english_turn_gets_a_language_line_in_the_system_prompt(make_agent):
+    agent = make_agent([answer("Hello!"), answer("We have four.")])
+    agent.respond("Vocês abrem hoje?")
+    agent.respond("Hi, do you sell ukuleles under 300 reais?")
+    assert "IDIOMA DESTE TURNO" not in agent.llm.calls[0][0]["content"]
+    assert "Responda em inglês" in agent.llm.calls[1][0]["content"]

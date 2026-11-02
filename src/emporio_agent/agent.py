@@ -26,6 +26,7 @@ from emporio_agent.prompts import (
     LOOP_LIMIT_MESSAGE,
     TOO_LONG_MESSAGE,
     build_system_prompt,
+    detect_language,
 )
 from emporio_agent.tool_schemas import build_tool_schemas, validate_arguments
 
@@ -105,7 +106,8 @@ class Agent:
             "list_categories": lambda a: tools.list_categories(store),
             "list_active_promotions": lambda a: tools.list_active_promotions(store),
             "calculate_installments": lambda a: tools.calculate_installments(
-                a.get("amount"), store=store, product=a.get("product")
+                a.get("amount"), store=store, product=a.get("product"),
+                products=a.get("products"),
             ),
             "get_order_status": lambda a: tools.get_order_status(
                 store, a["order_id"], a["contact"], today
@@ -205,6 +207,7 @@ class Agent:
         self.history.append({"role": "user", "content": message})
         result = TurnResult(answer="")
         retry_at: int | None = None  # history index of an answer rejected by the guardrail
+        language = detect_language(message)
 
         for _ in range(MAX_ITERATIONS):
             if self.clock() - start > TIME_BUDGET_SECONDS:
@@ -212,7 +215,7 @@ class Agent:
                 break
             messages = [
                 {"role": "system",
-                 "content": build_system_prompt(now, self.settings.assistant_name)},
+                 "content": build_system_prompt(now, self.settings.assistant_name, language)},
                 *self.history,
             ]
             try:

@@ -21,11 +21,11 @@ How it works, in one paragraph: a plain function-calling loop (ReAct style, no f
 
 | Measured on this prototype (`gpt-4.1-mini`) | Result |
 |---|---|
-| Golden dataset (20 cases, deterministic checks) | **20/20** in the last run; 79/80 over four runs ([evals/last_run.md](evals/last_run.md)) |
-| Average cost per customer message | ~US$ 0.0016 |
-| Median latency per customer message | ~2.2 s |
+| Golden dataset (27 cases, deterministic checks) | **80/81 over the last three runs** (27, 27, 26) ([evals/last_run.md](evals/last_run.md) is the last one) |
+| Average cost per customer message | ~US$ 0.002 |
+| Median latency per customer message | ~2.3 s |
 | Output guardrail triggers in the eval | 0 |
-| Unit tests (no LLM) | 279 passing |
+| Unit tests (no LLM) | 290 passing |
 
 ## 1b. Problem & scope
 
@@ -133,7 +133,7 @@ customer message
 | Structured data | Deterministic tools over the CSVs (pandas) | Price, stock and orders need exactness, and the manual forbids giving prices or stock without checking the system (7.1). The LLM never computes or invents a value |
 | Policies | **`get_policy(topic)`** over the manual split by its 10 numbered sections, no embeddings | The brief evaluates whether the agent knows **when** to consult policies: as a tool call that decision is explicit, visible in the trace and measurable in the eval. Splitting by the manual's own headings is deterministic, with no risk of retrieving the wrong passage |
 | Observability | Local JSONL trace per turn, with e-mails and phones masked | Tools, arguments, latency, errors, tokens and estimated cost without an external service; the base for the eval (section 7) |
-| LLM | OpenAI `gpt-4.1-mini` by default, configurable in `.env` | Cheap (~US$ 0.0016 per message here), reliable function calling with strict schemas. Through `OPENAI_BASE_URL` any OpenAI-compatible provider runs without code changes, paid or free, local or remote |
+| LLM | OpenAI `gpt-4.1-mini` by default, configurable in `.env` | Cheap (~US$ 0.002 per message here), reliable function calling with strict schemas. Through `OPENAI_BASE_URL` any OpenAI-compatible provider runs without code changes, paid or free, local or remote |
 | Interface | CLI, with `--debug` | The focus is the agent; `--debug` shows every tool call and result, which helps whoever evaluates it |
 | History | Within a session: yes. Across sessions: no, on purpose | See "History" in section 2 |
 
@@ -184,9 +184,9 @@ What it does not catch: a value that exists in the tool results but belongs to a
 
 ### Evaluation
 
-`evals/golden_dataset.jsonl` has 20 cases, run by `python scripts/eval.py` against the real model with a fixed reference date (some cases set their own, e.g. a holiday). Each case lists the customer messages and **deterministic** checks, with no LLM judge: tools that must be called, text that must appear in the final answer (a list means "any of these"), and text that must not appear in any answer. Texts are compared lowercase and without accents.
+`evals/golden_dataset.jsonl` has 27 cases (the plan was 15–20; 7 were added from bugs found in manual CLI sessions), run by `python scripts/eval.py` against the real model with a fixed reference date (some cases set their own, e.g. a holiday). Each case lists the customer messages and **deterministic** checks, with no LLM judge: tools that must be called, text that must appear in the final answer (a list means "any of these"), and text that must not appear in any answer. Texts are compared lowercase and without accents.
 
-Coverage: the 4 questions suggested in the brief, **verbatim**; every tool at least once; PIX not stacking on a promotion; the inactive promotion; installments using the right product's price (regression of a real bug); an out-of-stock product with alternatives; order verification with the right and the wrong contact; prompt injection asking for another customer's data; accessories and off-topic questions; a holiday; a question mixing data and policy; the ambiguous "contrabaixo"; shipping outside Campo Grande; a return inside its window; a complaint ending in a handoff.
+Coverage: the 4 questions suggested in the brief, **verbatim**; every tool at least once; PIX not stacking on a promotion; the inactive promotion; installments using the right product's price (regression of a real bug); an out-of-stock product with alternatives; order verification with the right and the wrong contact; prompt injection asking for another customer's data; accessories and off-topic questions; a holiday; a question mixing data and policy; the ambiguous "contrabaixo"; shipping outside Campo Grande; a return inside its window; a complaint ending in a handoff on a holiday. Added from manual testing: installments for two products bought together, "PIX in installments", an empty category (saxophone), a made-to-order exclusion, a product that arrived damaged, Black Friday without invented dates, and an English question in the middle of a Portuguese conversation.
 
 The runner prints and saves ([evals/last_run.md](evals/last_run.md)) the pass rate, average cost and median latency per message, guardrail triggers and fallback answers. It should run in CI before any change to the prompt, the tools or the model.
 
@@ -204,6 +204,8 @@ What the iterations showed:
 - **Instructions next to the data beat instructions in the prompt.** Rules stated only in the prompt or tool descriptions were followed inconsistently (say the total of a truncated search, show the original price and the %, show alternatives instead of offering them, give the deadline date, don't guess a name from the e-mail). Each became stable once the **tool result** carried it: an `instruction` field next to the data, ready-made `display` text for promotions (`de R$ 2.399,00 por R$ 1.967,18 (18% de desconto)`), `deadline_display` for return windows.
 - **A fix can break another case.** Telling the agent not to re-ask for data it already had made it ask for "confirmation" when the e-mail came in a second message; the wording had to say that one contact is enough and that verifying is the tool's job.
 
+**Manual testing found what the eval did not cover.** A CLI session with tricky questions surfaced 8 more problems: two products in 6x answered as impossible (the model read `can_combine_payments`, about payment *methods*, as combining *items*), "PIX in 3x" accepted, saxophones implied for an empty category, return rules answered from memory, invented Black Friday dates and an offer to "let you know" (the agent cannot send messages later), a cancellation registered without verification, and an English question answered in Portuguese. Fixes followed the same rule: computed in code where possible (`calculate_installments` now adds several products itself and says installments are credit-card only), pointed to the right manual section (`notes`), and, for the language, **detected in code** and stated to the model for that turn instead of relying on the prompt. Each became an eval case; the result is 80/81 over the last three runs.
+
 ### Retrieval architecture
 
 Two kinds of retrieval, chosen by what the question needs:
@@ -219,7 +221,7 @@ The choice between the two is the model's, guided by the tool descriptions, and 
 - **Current store time injected every turn** (weekday, date, time in Campo Grande), so "are you open now?" and date windows are consistent.
 - **"When to use" lives in each tool's description**, next to its schema, not in the prompt.
 - **Instructions next to the data.** Where the eval showed a rule being followed inconsistently, the tool result itself carries it: an `instruction` field (say the total of a truncated search, show the alternatives), ready-made `display` text for promotions, `deadline_display` for return windows (section 4, Evaluation).
-- **Portuguese**, because the agent talks to Brazilian customers (the code, docs and tool results are in English).
+- **Portuguese**, because the agent talks to Brazilian customers (the code, docs and tool results are in English). The language of each customer message is detected in code; when it is English, that turn's system prompt says so explicitly (the general "answer in the customer's language" rule alone was not followed after a Portuguese conversation).
 - **Low temperature (0.2)** for consistency; strict tool schemas so arguments always follow the schema.
 
 ### Data used (and not used)
@@ -263,6 +265,7 @@ The full diagnosis, written as a report to hand back to the store, is in [docs/d
 | Customers write product names loosely ("GD-20", "takamini") | Name lookup ignores separators and tolerates typos word by word; a typo match is flagged `approximate_match` so the agent confirms with the customer. Several matches return candidates instead of a guess |
 | Installment minimums (3.1) say nothing about paying in a single installment | 1x on credit is always allowed; the R$ 50 / 80 / 100 minimums apply from 2x on |
 | Splitting an amount into installments rarely gives whole cents (R$ 1.967,18 ÷ 10) | Each installment is rounded to the cent (half up, using `Decimal`); the total shown is always the exact amount. In practice the card operator absorbs the cents in one installment |
+| Installments for several products bought together | `calculate_installments` takes a list of products and adds their final prices itself; its result says installments are on credit card only and that `can_combine_payments` is about payment methods, not items (both misread in a real session) |
 | Installments for a product | `calculate_installments` takes the **product** and looks up its final price itself (promotional when active). In the first real run the model called it in parallel with `get_product_details` and passed the previous product's price; now it never needs to know the price first. `amount` remains for other values (e.g. two items together) |
 | How a customer proves an order is theirs (manual 9) | Order number + the e-mail (case-insensitive) or phone registered for **that order's** customer. Phone accepts any formatting and the +55 country code, but needs the area code (DDD). Unknown order, wrong contact and malformed input return the **same** message, so the response never reveals whether an order exists |
 | What a verified order lookup returns | Status, date, items, recorded total, payment method, tracking and estimate, notes, and the customer's **first name only** (for the greeting). No e-mail, phone, full name or city: the agent does not need them (data minimization) |
@@ -377,7 +380,8 @@ After an LLM failure, the partial tool exchange of that turn is dropped from his
 
 ## 8. Known limitations and what I'd do with more time
 
-- **Return exclusions are not always raised.** `check_return_eligibility` always returns the section 4.4 exclusions (customized instruments, "final sale" items, mouthpieces), which the data does not mark, but the agent does not always ask the customer about them (it did not in example 03). Next step: an `instruction` next to the data, as for the other rules, plus an eval case.
+- **Return exclusions are not always raised.** `check_return_eligibility` always returns the section 4.4 exclusions (customized instruments, "final sale" items, mouthpieces), which the data does not mark, but the agent does not always ask the customer about them (it did not in example 03). Asked directly "can I exchange a guitar with a made-to-order setup?", it answers from the policy in most runs but sometimes asks for the order first (the only eval miss in the last three runs). Next step: an `instruction` next to the data, as for the other rules.
+- **Language detection is a word-count heuristic** for Portuguese vs. English only. Other languages fall back to the prompt rule. Next step: a small language-identification library, if the store gets foreign customers.
 - **Redundant tool calls.** Asked "is any of these on sale?" right after a search, the model still looks up each product one by one (8 calls), although the search results already carry the promotion. The answer is right, but the turn costs about twice as much. Next step: an eval case that checks the number of calls, then either a tool that answers about several products at once or a per-turn call budget.
 - **Order verification can be guessed by brute force.** Order numbers are sequential and there is no limit on failed attempts per session. In production: lock or slow down after a few failures per phone number, and alert on many failures.
 - **Only one provider tested end to end.** Everything was run with OpenAI `gpt-4.1-mini`. Other OpenAI-compatible providers (including a free one, which the plan called for) work through `OPENAI_BASE_URL` but were not run; small local models are expected to choose tools worse. Next step: run the same eval per provider and publish the table.
