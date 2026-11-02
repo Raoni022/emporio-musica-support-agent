@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import difflib
 import re
-
+from datetime import date
 from decimal import Decimal
 
 from emporio_agent.data import StoreData, apply_discount, money, normalize_text
@@ -370,6 +370,110 @@ def list_active_promotions(store: StoreData) -> dict:
             }
             for p in promoted
         ],
+    }
+
+
+# --- Orders ------------------------------------------------------------------
+
+# Same message for unknown order, wrong contact and malformed input, so the
+# response never reveals whether an order exists (LGPD, manual section 9).
+ORDER_NOT_VERIFIED = (
+    "No order matches this order number and contact. Ask the customer to check the "
+    "order number and to use the e-mail or the phone number (with area code) registered "
+    "with the store."
+)
+STALE_ORDER_DAYS = 7  # pending/confirmed for longer than this is flagged as possibly delayed
+
+_PAYMENT_LABELS = {
+    "pix": "PIX",
+    "debit": "cartão de débito",
+    "boleto": "boleto bancário",
+}
+
+
+def _payment_label(method: str) -> str:
+    credit = re.fullmatch(r"credit_(\d+)x", method)
+    if credit:
+        return f"cartão de crédito em {credit.group(1)}x"
+    return _PAYMENT_LABELS.get(method, method)
+
+
+def _contact_matches(contact: str, customer: dict) -> bool:
+    """E-mail (case-insensitive) or phone digits, with or without the +55 country code.
+    The area code (DDD) is required."""
+    contact = (contact or "").strip()
+    if "@" in contact:
+        return contact.lower() == customer["email"]
+    digits = re.sub(r"\D", "", contact)
+    if len(digits) in (12, 13) and digits.startswith("55"):
+        digits = digits[2:]
+    return bool(digits) and digits == customer["phone_digits"]
+
+
+def verify_order_owner(store: StoreData, order_id, contact: str) -> tuple[dict, dict] | None:
+    """Return (order, customer) only if the contact belongs to the order's customer."""
+    match = re.fullmatch(r"\s*#?\s*(\d+)\s*", str(order_id))
+    if not match:
+        return None
+    orders = store.orders[store.orders["order_id"] == int(match.group(1))].to_dict("records")
+    if not orders:
+        return None
+    order = orders[0]
+    customers = store.customers[store.customers["customer_id"] == order["customer_id"]]
+    if customers.empty:
+        return None
+    customer = customers.to_dict("records")[0]
+    if not _contact_matches(contact, customer):
+        return None
+    return order, customer
+
+
+def _order_items(store: StoreData, order_id: int) -> list[dict]:
+    names = dict(zip(store.products["product_id"], store.products["name"]))
+    items = store.order_items[store.order_items["order_id"] == order_id]
+    return [
+        {"name": names.get(int(item["product_id"]), "produto fora do catálogo atual"),
+         "quantity": int(item["quantity"])}
+        for item in items.to_dict("records")
+    ]
+
+
+def _delay(order: dict, today: date) -> dict:
+    """Flags for orders that look late, so the agent can offer a handoff."""
+    if order["status"] == "shipped" and order["estimated_delivery"]:
+        days = (today - order["estimated_delivery"]).days
+        if days > 0:
+            return {"late": True, "days_past_estimate": days}
+    if order["status"] in ("pending", "confirmed"):
+        days = (today - order["order_date"]).days
+        if days > STALE_ORDER_DAYS:
+            return {"late": True, "days_in_current_status_since_order": days}
+    return {"late": False}
+
+
+def get_order_status(store: StoreData, order_id, contact: str, today: date) -> dict:
+    """Order status, only after checking the contact against the order's customer."""
+    verified = verify_order_owner(store, order_id, contact)
+    if verified is None:
+        return _error(ORDER_NOT_VERIFIED, verified=False)
+    order, customer = verified
+    estimated = order["estimated_delivery"]
+    delay = _delay(order, today)
+    return {
+        "verified": True,
+        "customer_first_name": customer["first_name"],
+        "order_id": int(order["order_id"]),
+        "status": order["status"],
+        "status_label": order["status_label"],
+        "order_date": order["order_date"].isoformat(),
+        "items": _order_items(store, int(order["order_id"])),
+        "total": float(order["total_brl"]),  # as recorded (what was charged); never recalculated
+        "payment_method": _payment_label(order["payment_method"]),
+        "tracking_code": order["tracking_code"],
+        "estimated_delivery": estimated.isoformat() if estimated else None,
+        "notes": order["notes"],
+        **delay,
+        "suggest_handoff": delay["late"],
     }
 
 

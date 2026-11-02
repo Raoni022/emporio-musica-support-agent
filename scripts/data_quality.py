@@ -34,9 +34,10 @@ from emporio_agent.policies import (  # noqa: E402
     load_policy_manual,
 )
 
+from emporio_agent.tools import STALE_ORDER_DAYS  # noqa: E402  (same threshold as the agent)
+
 OUTPUT = ROOT / "docs" / "data_quality.md"
 DEFAULT_REFERENCE_DATE = date(2026, 3, 25)
-STALE_ORDER_DAYS = 7
 
 KNOWN_BRANDS = (
     "Crafter", "Fender", "Giannini", "Gibson", "Ibanez", "Kala", "Kalani", "Korg",

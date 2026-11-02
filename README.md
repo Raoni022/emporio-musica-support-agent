@@ -69,6 +69,9 @@ The full diagnosis, written as a report to hand back to the store, is in [docs/d
 | Installment minimums (3.1) say nothing about paying in a single installment | 1x on credit is always allowed; the R$ 50 / 80 / 100 minimums apply from 2x on |
 | Splitting an amount into installments rarely gives whole cents (R$ 1.967,18 ÷ 10) | Each installment is rounded to the cent (half up, using `Decimal`); the total shown is always the exact amount. In practice the card operator absorbs the cents in one installment |
 | Installments for a promoted product | The agent passes the final price to `calculate_installments`; the tool does not look up products, so it works for any amount (e.g. two items together) |
+| How a customer proves an order is theirs (manual 9) | Order number + the e-mail (case-insensitive) or phone registered for **that order's** customer. Phone accepts any formatting and the +55 country code, but needs the area code (DDD). Unknown order, wrong contact and malformed input return the **same** message, so the response never reveals whether an order exists |
+| What a verified order lookup returns | Status, date, items, recorded total, payment method, tracking and estimate, notes, and the customer's **first name only** (for the greeting). No e-mail, phone, full name or city: the agent does not need them (data minimization) |
+| When an order counts as late | `shipped` past the estimated delivery, or `pending`/`confirmed` for more than 7 days since the order date. The tool returns `late` and `suggest_handoff`; the same threshold drives the data quality report |
 
 ## 5b. Where business rules live
 
@@ -82,6 +85,8 @@ Principle: a rule that can be **computed or verified lives in code**; an informa
 | Minimum installments 50 / 80 / 100, at most 12x | Code | `calculate_installments` | pytest |
 | Combining payment methods only above R$ 2.000 | Code | `calculate_installments` (`can_combine_payments`) | pytest |
 | Availability (stock, discontinued, coming soon) | Code | `data.py` (`availability`) | pytest |
+| Order identity verification (LGPD) | Code | `verify_order_owner`, used by `get_order_status` | pytest |
+| Late-order detection | Code | `get_order_status` (`late`, `suggest_handoff`) | pytest |
 | Policy text (returns, warranty, privacy...) and which contact to use | Manual | `get_policy` (`text` + `notes`) | pytest |
 
 ## 6. Example conversations
@@ -91,6 +96,8 @@ Principle: a rule that can be **computed or verified lives in code**; an informa
 ## 7b. Failure handling
 
 ## 8. Known limitations and what I'd do with more time
+
+- **Order verification can be guessed by brute force.** Order numbers are sequential and there is no limit on failed attempts per session. In production: lock or slow down after a few failures per phone number, and alert on many failures.
 
 ## 9. Path to production
 
