@@ -20,9 +20,18 @@ cp .env.example .env          # then fill in OPENAI_API_KEY
 ```
 
 ```bash
+python cli.py                       # chat with Tom
+python cli.py --debug               # also shows each tool call, its result, tokens, cost and latency
+python cli.py --reference-date 2026-03-22T10:00   # e.g. a Sunday, to see "closed, reopens Monday"
 pytest                              # tests, no LLM calls
 python scripts/data_quality.py      # regenerates docs/data_quality.md
 ```
+
+In the chat, `/reset` starts a new session and `/quit` exits. While a tool runs, a status line shows what Tom is doing (`🎵 Tom está consultando o catálogo...`).
+
+**Why status lines instead of token streaming:** the final answer is not streamed, because it will be checked by the output guardrail (prices must come from the tools) before the customer reads it. The status line keeps the wait visible without showing an unchecked answer.
+
+**History:** kept within a session (the customer often sends the order number in one message and the e-mail in the next), never across sessions, on purpose: the CLI has no stable customer identity, storing conversations means storing personal data (LGPD), and identity verification should not carry over from one session to another. In production: history per phone number with a TTL, and verification again in each session.
 
 **Configuration (`.env`):**
 
