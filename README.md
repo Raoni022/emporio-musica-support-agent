@@ -66,8 +66,23 @@ The full diagnosis, written as a report to hand back to the store, is in [docs/d
 | The brief asks for products "up to R$ X" but does not say whether that is the list or the promotional price | Search filters and sorts by the **final price** (promotional price when a promotion is active), i.e. what the customer pays. List price, discount and final price are always returned together |
 | Manual 7.3 asks for "similar alternatives" to unavailable products without defining similar | Up to 3 available products from the same category (and same string type when applicable), with a final price within ±30% of the original; if none fall in that band, the closest prices in the category |
 | Customers write product names loosely ("GD-20", "takamini") | Name lookup ignores separators and tolerates typos word by word; a typo match is flagged `approximate_match` so the agent confirms with the customer. Several matches return candidates instead of a guess |
+| Installment minimums (3.1) say nothing about paying in a single installment | 1x on credit is always allowed; the R$ 50 / 80 / 100 minimums apply from 2x on |
+| Splitting an amount into installments rarely gives whole cents (R$ 1.967,18 ÷ 10) | Each installment is rounded to the cent (half up, using `Decimal`); the total shown is always the exact amount. In practice the card operator absorbs the cents in one installment |
+| Installments for a promoted product | The agent passes the final price to `calculate_installments`; the tool does not look up products, so it works for any amount (e.g. two items together) |
 
 ## 5b. Where business rules live
+
+Principle: a rule that can be **computed or verified lives in code**; an informational rule comes from **`get_policy`**; *when* to use each tool lives in the **tool descriptions**; only **behavior** lives in the prompt. The prompt does not repeat rules the code already enforces.
+
+| Rule | Layer | Where | Tested by |
+|---|---|---|---|
+| Promotional price, discount % and original price | Code | `data.py` (derived at load), `search_products`, `get_product_details`, `list_active_promotions` | pytest |
+| Only one active promotion per product (largest wins) | Code | `data.pick_active_promotions` | pytest |
+| PIX 5% on the list price only, never on a promotional price | Code | `get_product_details` (`pix_price` is `null` with a `pix_note` when a promotion is active) | pytest |
+| Minimum installments 50 / 80 / 100, at most 12x | Code | `calculate_installments` | pytest |
+| Combining payment methods only above R$ 2.000 | Code | `calculate_installments` (`can_combine_payments`) | pytest |
+| Availability (stock, discontinued, coming soon) | Code | `data.py` (`availability`) | pytest |
+| Policy text (returns, warranty, privacy...) and which contact to use | Manual | `get_policy` (`text` + `notes`) | pytest |
 
 ## 6. Example conversations
 

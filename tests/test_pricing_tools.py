@@ -1,0 +1,104 @@
+import json
+
+import pytest
+
+from emporio_agent.data import load_store_data, money
+from emporio_agent.tools import calculate_installments, get_product_details, list_active_promotions
+
+
+@pytest.fixture(scope="module")
+def store():
+    return load_store_data()
+
+
+# --- PIX ---------------------------------------------------------------------
+
+
+def test_pix_is_5_percent_off_list_price(store):
+    # "Quanto custa o Takamine GD20?" R$ 2.199,00; PIX R$ 2.089,05.
+    product = get_product_details(store, "Takamine GD20")["product"]
+    assert product["price"] == 2199.0
+    assert product["pix_price"] == 2089.05
+    assert "pix_note" not in product
+
+
+def test_pix_does_not_stack_on_promotion(store):
+    # Crafter HT-100: 18% promotion -> R$ 1.967,18. 5% on top would be R$ 1.868,82.
+    product = get_product_details(store, "Crafter HT-100")["product"]
+    assert product["final_price"] == 1967.18
+    assert product["pix_price"] is None
+    assert "does not apply" in product["pix_note"]
+
+
+# --- Installments ------------------------------------------------------------
+
+
+def max_installments(amount):
+    return calculate_installments(amount)["max_installments"]
+
+
+@pytest.mark.parametrize(
+    "amount, expected",
+    [
+        (40, 1),  # 1x is always allowed
+        (120, 2),  # 3x would be R$ 40 < R$ 50
+        (150, 3),  # 3x of R$ 50: exactly the minimum
+        (159.9, 3),  # 4x would be R$ 39,98 < R$ 80
+        (480, 6),  # 6x of R$ 80: exactly the minimum
+        (599.9, 6),  # 7x would be R$ 85,70 < R$ 100
+        (1200, 12),  # 12x of R$ 100: exactly the minimum
+        (5999, 12),  # never more than 12x
+    ],
+)
+def test_installment_minimums(amount, expected):
+    assert max_installments(amount) == expected
+
+
+def test_installment_values_are_rounded_to_cents():
+    options = {o["installments"]: o for o in calculate_installments(1967.18)["options"]}
+    assert options[10]["installment_value"] == 196.72
+    assert options[10]["total"] == 1967.18
+    assert calculate_installments(1967.18)["interest_free"] is True
+
+
+def test_installment_options_are_contiguous():
+    counts = [o["installments"] for o in calculate_installments(1000)["options"]]
+    assert counts == list(range(1, 11))  # 10x of R$ 100; 11x would be R$ 90,91
+
+
+@pytest.mark.parametrize("amount, allowed", [(2000, False), (2000.01, True), (2199, True)])
+def test_combined_payment_only_above_2000(amount, allowed):
+    assert calculate_installments(amount)["can_combine_payments"] is allowed
+
+
+@pytest.mark.parametrize("amount", [0, -10, None])
+def test_invalid_amount_returns_structured_error(amount):
+    assert calculate_installments(amount)["retryable"] is False
+
+
+# --- Promotions --------------------------------------------------------------
+
+
+def test_list_active_promotions(store):
+    result = list_active_promotions(store)
+    assert result["count"] == 4
+    assert [p["product_id"] for p in result["promotions"]] == [121, 90, 127, 94]  # by discount
+    crafter = next(p for p in result["promotions"] if p["product_id"] == 90)
+    assert crafter["original_price"] == 2399.0
+    assert crafter["discount_percent"] == 18
+    assert crafter["promo_price"] == 1967.18
+    json.dumps(result)
+
+
+def test_inactive_promotions_are_not_listed(store):
+    listed = {p["product_id"] for p in list_active_promotions(store)["promotions"]}
+    assert 95 not in listed  # Takamine GD20, inactive 12%
+
+
+# --- Rounding ----------------------------------------------------------------
+
+
+@pytest.mark.parametrize("value, expected", [(0.125, 0.13), (2.675, 2.68), (1.005, 1.01)])
+def test_money_rounds_half_up(value, expected):
+    # Plain round() gives 0.12, 2.67 and 1.0 for these.
+    assert money(value) == expected

@@ -11,7 +11,9 @@ from __future__ import annotations
 import difflib
 import re
 
-from emporio_agent.data import StoreData, normalize_text
+from decimal import Decimal
+
+from emporio_agent.data import StoreData, apply_discount, money, normalize_text
 from emporio_agent.policies import SECTION_NOTES, TOPICS, PolicyManual
 
 SEARCH_LIMIT = 8
@@ -19,6 +21,14 @@ MAX_CANDIDATES = 5
 MAX_ALTERNATIVES = 3
 ALTERNATIVE_PRICE_BAND = 0.30  # alternatives within ±30% of the product's price
 FUZZY_CUTOFF = 0.75  # per-word similarity for typo-tolerant name lookup
+
+# Payment rules (manual, section 3).
+PIX_DISCOUNT_PERCENT = 5
+MAX_INSTALLMENTS = 12
+# (up to N installments, minimum installment value). "Até 3x sem valor mínimo
+# (exceto abaixo de R$ 50,00)" is read as a R$ 50 minimum. Paying in 1x is always allowed.
+INSTALLMENT_MINIMUMS = ((3, 50.0), (6, 80.0), (12, 100.0))
+COMBINED_PAYMENT_THRESHOLD = 2000.0  # combining methods only "acima de R$ 2.000,00"
 
 STRING_TYPES = ("nylon", "steel")
 _STOPWORDS = frozenset({"a", "as", "o", "os", "de", "da", "do", "das", "dos", "e", "em",
@@ -109,12 +119,26 @@ def _summary(product: dict) -> dict:
 
 
 def _details(product: dict) -> dict:
-    return {
+    details = {
         **_summary(product),
+        "pix_price": _pix_price(product),
         "stock_quantity": int(product["stock_quantity"]),
         "specs": product["specs"],
         "description": product["description"],
     }
+    if details["pix_price"] is None:
+        details["pix_note"] = (
+            "The PIX discount does not apply on top of a promotional price (manual 6.2); "
+            "the PIX price is the promotional price."
+        )
+    return details
+
+
+def _pix_price(product: dict) -> float | None:
+    """5% off the list price; None when a promotion is active (not cumulative)."""
+    if product["promotion_id"] is not None:
+        return None
+    return apply_discount(float(product["price_brl"]), PIX_DISCOUNT_PERCENT)
 
 
 def _products(store: StoreData) -> list[dict]:
@@ -294,6 +318,59 @@ def list_categories(store: StoreData) -> dict:
             }
         )
     return {"categories": categories}
+
+
+# --- Pricing tools -----------------------------------------------------------
+
+
+def _minimum_installment(installments: int) -> float:
+    for up_to, minimum in INSTALLMENT_MINIMUMS:
+        if installments <= up_to:
+            return minimum
+    raise ValueError(installments)
+
+
+def calculate_installments(amount: float) -> dict:
+    """Interest-free credit card options for an amount (manual, section 3.1).
+
+    Values are rounded to cents; the card operator may adjust the last
+    installment by a few cents so the total matches the amount exactly.
+    """
+    if amount is None or amount <= 0:
+        return _error("amount must be greater than zero.")
+    amount = money(amount)
+    options = []
+    for n in range(1, MAX_INSTALLMENTS + 1):
+        value = money(Decimal(str(amount)) / n)
+        if n > 1 and value < _minimum_installment(n):
+            continue
+        options.append({"installments": n, "installment_value": value, "total": amount})
+    return {
+        "amount": amount,
+        "interest_free": True,
+        "max_installments": options[-1]["installments"],
+        "options": options,
+        "can_combine_payments": amount > COMBINED_PAYMENT_THRESHOLD,
+    }
+
+
+def list_active_promotions(store: StoreData) -> dict:
+    """Products with an active promotion, largest discount first."""
+    promoted = [p for p in _products(store) if p["promotion_id"] is not None]
+    promoted.sort(key=lambda p: (-int(p["discount_percent"]), p["name"]))
+    return {
+        "count": len(promoted),
+        "promotions": [
+            {
+                "product_id": int(p["product_id"]),
+                "name": p["name"],
+                "category": p["category_name"],
+                "availability": p["availability"],
+                **_promotion(p),
+            }
+            for p in promoted
+        ],
+    }
 
 
 # --- Policies ----------------------------------------------------------------

@@ -13,6 +13,7 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from datetime import date
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
 import pandas as pd
@@ -162,8 +163,17 @@ def pick_active_promotions(promotions: pd.DataFrame) -> pd.DataFrame:
     return active.drop_duplicates("product_id", keep="first").reset_index(drop=True)
 
 
+def money(value: float | Decimal) -> float:
+    """Round to cents, half up (float round() is half-even and binary-inexact)."""
+    return float(Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+
+def apply_discount(price: float, discount_percent: int) -> float:
+    return money(Decimal(str(price)) * (100 - discount_percent) / 100)
+
+
 def promo_price(price: float, discount_percent: int) -> float:
-    return round(price * (100 - discount_percent) / 100, 2)
+    return apply_discount(price, discount_percent)
 
 
 # --- Table loaders -----------------------------------------------------------
