@@ -119,3 +119,7 @@ def test_recent_open_order_is_not_late(store):
 def test_delay_depends_on_reference_date(store):
     result = status(store, 8, "anacarol.ferreira@coldmail.com", today=date(2026, 2, 27))
     assert result["late"] is False
+
+
+def test_failed_verification_warns_against_guessing_the_name(store):
+    assert "do not address them by a name" in status(store, 1, "lucas.mendes@jmail.com")["error"]

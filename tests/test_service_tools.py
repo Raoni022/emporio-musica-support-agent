@@ -238,3 +238,8 @@ def test_invalid_handoff(store, tmp_path, reason, summary):
 def test_handoff_write_failure_is_a_retryable_error(store, tmp_path):
     result = register_handoff(store, tmp_path, "other", "x", local(2026, 3, 25, 10, 0))
     assert result["retryable"] is True
+
+
+def test_deadline_is_returned_ready_to_show(store):
+    result = check_return_eligibility(store, ORDER, CONTACT, "regret", date(2026, 2, 20))
+    assert result["deadline_display"] == "24/02/2026 (terça-feira)"

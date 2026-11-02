@@ -46,8 +46,10 @@ def build_tool_schemas(store: StoreData) -> list[dict]:
             "search_products",
             "Busca produtos no catálogo com filtros. Use para perguntas abertas "
             "(\"violões até R$ 1000\", \"tem guitarra?\"). Por padrão só traz itens à venda, "
-            "ordenados pelo preço final. Se truncated=true, diga quantas opções existem "
-            "(total_count) e ofereça filtrar usando refine_by.",
+            "ordenados pelo preço final. Cada resultado já traz a promoção ativa (promotion), "
+            "então não consulte os produtos um a um para saber se estão em promoção. Se "
+            "truncated=true, diga quantas opções existem (total_count) e ofereça filtrar "
+            "usando refine_by.",
             {
                 "query": _nullable({"type": "string", "description": "Termos de busca livres."}),
                 "category": _nullable({"type": "string", "enum": categories}),
@@ -67,13 +69,16 @@ def build_tool_schemas(store: StoreData) -> list[dict]:
             "Detalhes de UM produto pelo nome ou id: preço, promoção ativa, preço no PIX, "
             "estoque e especificações. Use sempre que o cliente citar um produto específico, "
             "antes de informar preço ou disponibilidade. Se vier ambiguous, pergunte qual; se "
-            "approximate_match, confirme o nome; se indisponível, ofereça as alternatives.",
+            "approximate_match, confirme o nome. Se o produto estiver indisponível, diga isso e "
+            "mostre já na mesma resposta as alternatives (nome e preço); não pergunte se pode "
+            "mostrar.",
             {"product": {"type": "string", "description": "Nome (mesmo aproximado) ou id."}},
         ),
         _tool("list_categories",
               "Lista as categorias da loja com quantos produtos estão à venda em cada uma."),
         _tool("list_active_promotions",
-              "Lista as promoções ativas agora. Use para \"tem alguma promoção?\"."),
+              "Lista as promoções ativas agora. Use para qualquer pergunta geral sobre "
+              "promoções (\"tem alguma promoção?\", \"o que está em oferta?\")."),
         _tool(
             "calculate_installments",
             "Opções de parcelamento sem juros no cartão, com as parcelas mínimas da loja, e "
@@ -88,8 +93,11 @@ def build_tool_schemas(store: StoreData) -> list[dict]:
         ),
         _tool(
             "get_order_status",
-            "Status de um pedido. Exige o número do pedido e o e-mail ou telefone (com DDD) "
-            "do cadastro; a verificação é feita pela ferramenta. Se late=true, ofereça "
+            "Status de um pedido. Exige o número do pedido e um contato do cadastro (o e-mail "
+            "OU o telefone com DDD). Chame assim que tiver os dois, mesmo que vieram em "
+            "mensagens diferentes: a verificação é feita pela ferramenta, não peça confirmação "
+            "ao cliente. Informe o status, a previsão "
+            "e, se houver, o código de rastreio (tracking_code). Se late=true, ofereça "
             "encaminhar à equipe.",
             {"order_id": {"type": "string"}, "contact": {"type": "string"}},
         ),
@@ -98,7 +106,8 @@ def build_tool_schemas(store: StoreData) -> list[dict]:
             "Verifica se um pedido pode ser devolvido ou trocado e até quando: regret "
             "(arrependimento), defect (defeito) ou preference (troca por cor/modelo). Exige "
             "número do pedido e e-mail ou telefone do cadastro. Pergunte o motivo se não "
-            "estiver claro e confira com o cliente as exclusões retornadas.",
+            "estiver claro e confira com o cliente as exclusões retornadas. Sempre diga a data "
+            "limite (deadline_display), não só o número de dias.",
             {
                 "order_id": {"type": "string"},
                 "contact": {"type": "string"},

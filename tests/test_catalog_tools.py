@@ -177,6 +177,7 @@ def test_details_include_active_promotion(store):
         "discount_percent": 18,
         "original_price": 2399.0,
         "promo_price": 1967.18,
+        "display": "de R$ 2.399,00 por R$ 1.967,18 (18% de desconto)",
     }
 
 
@@ -246,3 +247,20 @@ def test_unmatched_words_without_filters_still_return_nothing(store):
     result = search_products(store, query="theremin")
     assert result["total_count"] == 0
     assert "query_relaxed" not in result
+
+
+# --- Instructions next to the data (from eval failures) ----------------------
+
+
+def test_truncated_search_tells_the_total(store):
+    result = search_products(store, category="Violões", max_price=1000)
+    assert "12 options in total" in result["instruction"]
+
+
+def test_unavailable_product_instructs_to_show_alternatives(store):
+    result = get_product_details(store, "Giannini GF-3D")
+    assert "do not ask whether to show them" in result["instruction"]
+
+
+def test_available_product_has_no_instruction(store):
+    assert "instruction" not in get_product_details(store, "Takamine GD20")

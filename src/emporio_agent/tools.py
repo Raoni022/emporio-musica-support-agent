@@ -20,6 +20,7 @@ from pathlib import Path
 import holidays
 
 from emporio_agent.data import StoreData, apply_discount, money, normalize_text
+from emporio_agent.guardrails import format_brl
 from emporio_agent.policies import SECTION_NOTES, TOPICS, PolicyManual
 
 SEARCH_LIMIT = 8
@@ -102,11 +103,16 @@ def _final_price(product: dict) -> float:
 def _promotion(product: dict) -> dict | None:
     if product["promotion_id"] is None:
         return None
+    original, promo = float(product["price_brl"]), float(product["promo_price"])
+    percent = int(product["discount_percent"])
     return {
         "description": product["promotion_description"],
-        "discount_percent": int(product["discount_percent"]),
-        "original_price": float(product["price_brl"]),
-        "promo_price": float(product["promo_price"]),
+        "discount_percent": percent,
+        "original_price": original,
+        "promo_price": promo,
+        # Ready-made wording with the three values manual 6.2 requires together; in eval
+        # runs the model sometimes dropped the original price or the percentage.
+        "display": f"de {format_brl(original)} por {format_brl(promo)} ({percent}% de desconto)",
     }
 
 
@@ -136,6 +142,11 @@ def _details(product: dict) -> dict:
         details["pix_note"] = (
             "The PIX discount does not apply on top of a promotional price (manual 6.2); "
             "the PIX price is the promotional price."
+        )
+    if details["promotion"]:
+        details["promotion_display_rule"] = (
+            "Always show the original price, the discount % and the final price together, "
+            "as in promotion.display (manual 6.2)."
         )
     return details
 
@@ -242,6 +253,12 @@ def search_products(
         # Lets the agent say "it exists but is out of stock" instead of "not found".
         result["unavailable_matches"] = len(unavailable)
     if result["truncated"]:
+        # Said next to the data: in a real eval run the model listed 8 of 12 options
+        # without saying there were more, although the tool description asks for it.
+        result["instruction"] = (
+            f"Showing {SEARCH_LIMIT} of {len(matches)} options. Tell the customer there are "
+            f"{len(matches)} options in total and offer to narrow them down (refine_by)."
+        )
         # Ways to narrow the search, counted over all matches.
         result["refine_by"] = {
             "string_type": _count(p["string_type"] for p in matches),
@@ -320,6 +337,13 @@ def get_product_details(store: StoreData, product: str | int) -> dict:
     result = {"product": _details(match), "approximate_match": approximate}
     if match["availability"] != "available":
         result["alternatives"] = _alternatives(store, match)
+        if result["alternatives"]:
+            # Said next to the data: in eval runs the model often asked whether it could
+            # show alternatives instead of showing them (manual 7.3).
+            result["instruction"] = (
+                "The product is not available. In this same answer, say so and list these "
+                "alternatives with name and final price; do not ask whether to show them."
+            )
     return result
 
 
@@ -427,7 +451,8 @@ def list_active_promotions(store: StoreData) -> dict:
 ORDER_NOT_VERIFIED = (
     "No order matches this order number and contact. Ask the customer to check the "
     "order number and to use the e-mail or the phone number (with area code) registered "
-    "with the store."
+    "with the store. The customer is not verified: do not address them by a name "
+    "guessed from the e-mail."
 )
 STALE_ORDER_DAYS = 7  # pending/confirmed for longer than this is flagged as possibly delayed
 
@@ -563,6 +588,7 @@ def _window(start: date, days: int, today: date) -> dict:
     return {
         "eligible": remaining >= 0,
         "deadline": deadline.isoformat(),
+        "deadline_display": f"{deadline:%d/%m/%Y} ({WEEKDAYS_PT[deadline.weekday()]})",
         "days_remaining": max(remaining, 0),
         "days_past_deadline": max(-remaining, 0),
     }

@@ -109,6 +109,14 @@ The runner prints and saves ([evals/last_run.md](evals/last_run.md)) the pass ra
 - late shipped order: a good answer, but without the tracking code;
 - complaint: it asked for a phone number although the customer had given an e-mail, so the handoff never happened.
 
+**After the fixes (`fix: follow the eval failures`): 20/20 in the last run**, and 79/80 over four consecutive runs while fixing (20, 19, 20, 20), US$ 0.0016 per message, median latency 2.2–2.4 s, no guardrail triggers, no fallback answers.
+
+What the iterations showed:
+
+- **One run is not enough.** At temperature 0.2 the same case can pass and fail on consecutive runs; the first round of fixes (prompt only) went from 17 to 16, with different cases failing. The eval was then run several times per change.
+- **Instructions next to the data beat instructions in the prompt.** Rules stated only in the prompt or tool descriptions were followed inconsistently (say the total of a truncated search, show the original price and the %, show alternatives instead of offering them, give the deadline date, don't guess a name from the e-mail). Each became stable once the **tool result** carried it: an `instruction` field next to the data, ready-made `display` text for promotions (`de R$ 2.399,00 por R$ 1.967,18 (18% de desconto)`), `deadline_display` for return windows.
+- **A fix can break another case.** Telling the agent not to re-ask for data it already had made it ask for "confirmation" when the e-mail came in a second message; the wording had to say that one contact is enough and that verifying is the tool's job.
+
 ### Retrieval architecture
 
 ### Prompt strategy
@@ -242,6 +250,7 @@ After an LLM failure, the partial tool exchange of that turn is dropped from his
 
 ## 8. Known limitations and what I'd do with more time
 
+- **Redundant tool calls.** Asked "is any of these on sale?" right after a search, the model still looks up each product one by one (8 calls), although the search results already carry the promotion. The answer is right, but the turn costs about twice as much. Next step: an eval case that checks the number of calls, then either a tool that answers about several products at once or a per-turn call budget.
 - **Order verification can be guessed by brute force.** Order numbers are sequential and there is no limit on failed attempts per session. In production: lock or slow down after a few failures per phone number, and alert on many failures.
 
 ## 9. Path to production
