@@ -63,6 +63,9 @@ The full diagnosis, written as a report to hand back to the store, is in [docs/d
 | The store e-mail appears with an accent in table 1.2 (`empóriodamusica`) | Use `contato@emporiodamusica.com.br` (cover); same `notes` mechanism |
 | The payment table says "minimum installment R$ 100,00" for credit; section 3.1 sets R$ 50 / 80 / 100 by number of installments | Section 3.1 applies; installments are computed by a tool. "No minimum (except below R$ 50,00)" is read as a R$ 50 minimum installment |
 | Section 7.1 says to suggest partner stores, but none are listed | The agent does not name other stores |
+| The brief asks for products "up to R$ X" but does not say whether that is the list or the promotional price | Search filters and sorts by the **final price** (promotional price when a promotion is active), i.e. what the customer pays. List price, discount and final price are always returned together |
+| Manual 7.3 asks for "similar alternatives" to unavailable products without defining similar | Up to 3 available products from the same category (and same string type when applicable), with a final price within ±30% of the original; if none fall in that band, the closest prices in the category |
+| Customers write product names loosely ("GD-20", "takamini") | Name lookup ignores separators and tolerates typos word by word; a typo match is flagged `approximate_match` so the agent confirms with the customer. Several matches return candidates instead of a guess |
 
 ## 5b. Where business rules live
 
