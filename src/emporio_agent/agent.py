@@ -52,6 +52,7 @@ class TurnResult:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     error_type: str | None = None  # set when a fixed message replaced the LLM answer
+    latency_ms: int = 0
 
 
 class Agent:
@@ -162,11 +163,16 @@ class Agent:
     # --- Turn ----------------------------------------------------------------
 
     def respond(self, message: str) -> TurnResult:
+        start = self.clock()
+        result = self._respond(message, start)
+        result.latency_ms = int((self.clock() - start) * 1000)
+        return result
+
+    def _respond(self, message: str, start: float) -> TurnResult:
         if len(message) > MAX_MESSAGE_CHARS:
             return TurnResult(TOO_LONG_MESSAGE.format(limit=MAX_MESSAGE_CHARS),
                               error_type="message_too_long")
 
-        start = self.clock()
         now = self.settings.now()
         functions = self._tool_functions(now)
         self._trim_history(MAX_HISTORY_TURNS - 1)

@@ -29,7 +29,7 @@ python scripts/data_quality.py      # regenerates docs/data_quality.md
 | Variable | Default | Purpose |
 |---|---|---|
 | `OPENAI_API_KEY` | (required) | Key for OpenAI or any OpenAI-compatible provider. For a local server such as Ollama, any non-empty value |
-| `OPENAI_BASE_URL` | empty (OpenAI) | Any OpenAI-compatible endpoint, e.g. Gemini `https://generativelanguage.googleapis.com/v1beta/openai/`, Groq `https://api.groq.com/openai/v1`, Ollama `http://localhost:11434/v1` |
+| `OPENAI_BASE_URL` | empty (OpenAI) | Any OpenAI-compatible endpoint, e.g. Anthropic `https://api.anthropic.com/v1/`, Gemini `https://generativelanguage.googleapis.com/v1beta/openai/`, Groq `https://api.groq.com/openai/v1`, Ollama `http://localhost:11434/v1` |
 | `MODEL` | `gpt-4.1-mini` | Model name as the provider expects it |
 | `REFERENCE_DATE` | empty (real time) | Fixed "now" (`YYYY-MM-DD`, 10:00 assumed, or `YYYY-MM-DDTHH:MM`). The data ends in March 2026; with the real date every delivered order is outside any return window, so examples and tests use `2026-03-25T10:00` |
 | `STRICT_TOOLS` | `true` | Set `false` for providers that reject strict tool schemas; arguments are validated in code either way |
@@ -146,6 +146,42 @@ Principle: a rule that can be **computed or verified lives in code**; an informa
 ## 6. Example conversations
 
 ## 7. Observability
+
+Every turn appends one JSON line to `logs/traces.jsonl` (outside git), written by `tracing.py` without any external service:
+
+- the customer message and the final answer;
+- each tool call with its arguments, latency and error (tool results are left out: they are large and can contain personal data);
+- the manual version used by each `get_policy` call (to audit which policy an answer relied on);
+- iterations, prompt and completion tokens, an **estimated** cost in USD (from a price table; `null` for unknown, free or local models), total latency;
+- `error_type` when a fixed message replaced the LLM answer, and `resolved` (`false` on errors or when the agent handed off a question it could not answer).
+
+**PII masking:** customer e-mails and phones are masked everywhere in the trace (`l***@jmail.com`, `(67) 9****-3456`), including inside tool arguments. Prices, dates, tracking codes, the CNPJ and the store's own public contact are left as they are. If the trace cannot be written, the conversation goes on.
+
+Example line (formatted):
+
+```json
+{
+  "timestamp": "2026-03-25T10:00:00-04:00",
+  "session_id": "a1b2c3",
+  "model": "gpt-4.1-mini",
+  "user_message": "Pedido 3, meu e-mail é i***@jmail.com",
+  "tool_calls": [
+    {"name": "get_order_status", "arguments": {"order_id": "3", "contact": "i***@jmail.com"}, "latency_ms": 12, "error": null},
+    {"name": "get_policy", "arguments": {"topic": "returns_and_exchanges"}, "latency_ms": 1, "error": null}
+  ],
+  "policy_versions": [{"section": 4, "version": "Versão 2.1 — Junho de 2025"}],
+  "iterations": 2,
+  "prompt_tokens": 1500,
+  "completion_tokens": 200,
+  "estimated_cost_usd": 0.00092,
+  "latency_ms": 2300,
+  "error_type": null,
+  "resolved": true,
+  "final_response": "Achei seu pedido, Isabela!"
+}
+```
+
+Next step: send the same fields to Langfuse or OpenTelemetry instead of a local file.
 
 ## 7b. Failure handling
 
