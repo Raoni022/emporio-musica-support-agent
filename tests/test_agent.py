@@ -315,3 +315,13 @@ def test_missing_api_key_fails_clearly(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     with pytest.raises(ConfigError, match="OPENAI_API_KEY"):
         load_settings()
+
+
+def test_env_file_wins_over_system_variables(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENAI_API_KEY", "old-key-from-the-system")
+    monkeypatch.setenv("MODEL", "old-model")
+    env_file = tmp_path / ".env"
+    env_file.write_text("OPENAI_API_KEY=key-from-dotenv\nMODEL=gpt-4.1-mini\n", encoding="utf-8")
+    settings = load_settings(env_file=env_file)
+    assert settings.api_key == "key-from-dotenv"
+    assert settings.model == "gpt-4.1-mini"

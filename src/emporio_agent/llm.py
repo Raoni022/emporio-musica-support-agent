@@ -14,6 +14,7 @@ import openai
 
 from emporio_agent.config import Settings
 
+OPENAI_DEFAULT_BASE_URL = "https://api.openai.com/v1"
 TIMEOUT_SECONDS = 30
 MAX_RETRIES = 2
 TEMPERATURE = 0.2
@@ -59,7 +60,9 @@ class OpenAIClient:
         self.strict_tools = settings.strict_tools
         self._client = openai.OpenAI(
             api_key=settings.api_key,
-            base_url=settings.base_url,
+            # Never pass None: the SDK would then read OPENAI_BASE_URL from the
+            # environment, where an empty line in .env leaves "" (no protocol).
+            base_url=settings.base_url or OPENAI_DEFAULT_BASE_URL,
             timeout=TIMEOUT_SECONDS,
             max_retries=MAX_RETRIES,
         )
@@ -77,7 +80,10 @@ class OpenAIClient:
         except openai.APIConnectionError as exc:
             raise LLMError("connection", str(exc)) from exc
         except openai.RateLimitError as exc:
-            raise LLMError("rate_limit", str(exc)) from exc
+            # A 429 is also how OpenAI reports an account without credits.
+            body = exc.body if isinstance(exc.body, dict) else {}
+            kind = "insufficient_quota" if body.get("type") == "insufficient_quota" else "rate_limit"
+            raise LLMError(kind, str(exc)) from exc
         except openai.AuthenticationError as exc:
             raise LLMError("authentication", str(exc)) from exc
         except openai.APIStatusError as exc:

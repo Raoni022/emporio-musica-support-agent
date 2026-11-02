@@ -67,8 +67,10 @@ def _bool(value: str | None, default: bool) -> bool:
     return value.strip().lower() in ("1", "true", "yes", "on")
 
 
-def load_settings(require_api_key: bool = True) -> Settings:
-    load_dotenv(ROOT / ".env")
+def load_settings(require_api_key: bool = True, env_file: Path = ROOT / ".env") -> Settings:
+    # override=True: the project's .env wins over variables already set in the
+    # system (e.g. an old OPENAI_API_KEY in the user's environment).
+    load_dotenv(env_file, override=True)
     api_key = os.getenv("OPENAI_API_KEY", "").strip()
     if require_api_key and not api_key:
         raise ConfigError(
