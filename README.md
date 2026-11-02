@@ -97,6 +97,18 @@ What it does not catch: a value that exists in the tool results but belongs to a
 
 ### Evaluation
 
+`evals/golden_dataset.jsonl` has 20 cases, run by `python scripts/eval.py` against the real model with a fixed reference date (some cases set their own, e.g. a holiday). Each case lists the customer messages and **deterministic** checks, with no LLM judge: tools that must be called, text that must appear in the final answer (a list means "any of these"), and text that must not appear in any answer. Texts are compared lowercase and without accents.
+
+Coverage: the 4 questions suggested in the brief, **verbatim**; every tool at least once; PIX not stacking on a promotion; the inactive promotion; installments using the right product's price (regression of a real bug); an out-of-stock product with alternatives; order verification with the right and the wrong contact; prompt injection asking for another customer's data; accessories and off-topic questions; a holiday; a question mixing data and policy; the ambiguous "contrabaixo"; shipping outside Campo Grande; a return inside its window; a complaint ending in a handoff.
+
+The runner prints and saves ([evals/last_run.md](evals/last_run.md)) the pass rate, average cost and median latency per message, guardrail triggers and fallback answers. It should run in CI before any change to the prompt, the tools or the model.
+
+**Baseline (first run, `gpt-4.1-mini`): 17/20 (85%)**, US$ 0.0014 per message, median latency 2.1 s, no guardrail triggers, no fallback answers. The 3 failures were real behavior problems:
+
+- out-of-stock product: it offered to show alternatives instead of showing the ones the tool returned (manual 7.3);
+- late shipped order: a good answer, but without the tracking code;
+- complaint: it asked for a phone number although the customer had given an e-mail, so the handoff never happened.
+
 ### Retrieval architecture
 
 ### Prompt strategy
