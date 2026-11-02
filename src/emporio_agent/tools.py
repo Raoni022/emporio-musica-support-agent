@@ -194,22 +194,35 @@ def search_products(
             return error
     query_tokens = _tokens(query) if query else []
 
-    matches = []
-    for product in _products(store):
-        price = _final_price(product)
-        if category_name and product["category_name"] != category_name:
-            continue
-        if query_tokens and not _matches(query_tokens, _tokens(product["search_text"])):
-            continue
-        if min_price is not None and price < min_price:
-            continue
-        if max_price is not None and price > max_price:
-            continue
-        if string_type is not None and product["string_type"] != string_type:
-            continue
-        if electronics is not None and product["electronics"] is not electronics:
-            continue
-        matches.append(product)
+    def find(tokens: list[str]) -> list[dict]:
+        found = []
+        for product in _products(store):
+            price = _final_price(product)
+            if category_name and product["category_name"] != category_name:
+                continue
+            if tokens and not _matches(tokens, _tokens(product["search_text"])):
+                continue
+            if min_price is not None and price < min_price:
+                continue
+            if max_price is not None and price > max_price:
+                continue
+            if string_type is not None and product["string_type"] != string_type:
+                continue
+            if electronics is not None and product["electronics"] is not electronics:
+                continue
+            found.append(product)
+        return found
+
+    matches = find(query_tokens)
+    # The model often repeats the customer's words in `query` next to structured
+    # filters ("violão clássico" + nylon). If those words match nothing but the
+    # filters do, answer with the filters instead of a false "we don't have it".
+    has_filters = any(v is not None for v in (category_name, min_price, max_price,
+                                              string_type, electronics))
+    query_relaxed = False
+    if not matches and query_tokens and has_filters:
+        matches = find([])
+        query_relaxed = bool(matches)
 
     unavailable = [p for p in matches if p["availability"] != "available"]
     if not include_unavailable:
@@ -221,6 +234,10 @@ def search_products(
         "truncated": len(matches) > SEARCH_LIMIT,
         "results": [_summary(p) for p in matches[:SEARCH_LIMIT]],
     }
+    if query_relaxed:
+        result["query_relaxed"] = True
+        result["note"] = (f"No product matched the words {query!r}; these results match the "
+                          "other filters only.")
     if not include_unavailable and unavailable:
         # Lets the agent say "it exists but is out of stock" instead of "not found".
         result["unavailable_matches"] = len(unavailable)

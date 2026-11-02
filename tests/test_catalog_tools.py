@@ -211,3 +211,38 @@ def test_list_categories_counts_available_products(store):
     assert categories["Violões"] == 33
     assert categories["Cordas Orquestrais"] == 0
     assert categories["Ukuleles"] == 14  # 15 products, one coming_soon
+
+
+# --- Real-run regression: "violão clássico" returned nothing ------------------
+
+
+def test_classico_matches_nylon_guitars(store):
+    # Real run: query="violão clássico" + string_type=nylon gave 0 results and the
+    # agent told the customer the store had no classical guitars (there are 15).
+    result = search_products(store, query="violão clássico", category="Violões", string_type="nylon")
+    assert result["total_count"] == 15
+    assert "query_relaxed" not in result
+
+
+@pytest.mark.parametrize(
+    "query, field, value",
+    [("clássicos", "string_type", "nylon"), ("folk", "string_type", "steel"),
+     ("eletroacústico", "electronics", True)],
+)
+def test_customer_words_derived_from_specs(store, query, field, value):
+    result = search_products(store, query=query, category="Violões")
+    assert result["total_count"] > 3
+    assert {p[field] for p in result["results"]} == {value}
+
+
+def test_unmatched_words_fall_back_to_the_filters(store):
+    result = search_products(store, query="para iniciante barato", category="Violões", max_price=500)
+    assert result["query_relaxed"] is True
+    assert result["total_count"] == 2  # Tagima AC-39 and Rozini RC-104
+    assert "note" in result
+
+
+def test_unmatched_words_without_filters_still_return_nothing(store):
+    result = search_products(store, query="theremin")
+    assert result["total_count"] == 0
+    assert "query_relaxed" not in result

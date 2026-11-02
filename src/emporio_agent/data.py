@@ -38,8 +38,11 @@ ORDER_STATUS_LABELS = {
     "cancelled": "cancelado",
 }
 
-# Portuguese search terms for the normalized string material.
-STRING_TYPE_TERMS = {"nylon": "nylon", "steel": "aco"}
+# Portuguese search terms derived from the specs, so customers' words match even
+# when the product name does not use them ("violão clássico" -> nylon strings).
+STRING_TYPE_TERMS = {"nylon": "nylon classico", "steel": "aco folk"}
+ELECTRONICS_TERMS = "eletroacustico eletrico captacao"
+STRING_TYPES = frozenset(STRING_TYPE_TERMS)
 
 
 class DataLoadError(RuntimeError):
@@ -123,7 +126,7 @@ def parse_specs(raw: str) -> dict:
         if key == "strings":
             if value.isdigit():
                 normalized["string_count"] = int(value)
-            elif value.lower() in STRING_TYPE_TERMS:
+            elif value.lower() in STRING_TYPES:
                 normalized["string_type"] = value.lower()
             else:
                 raise DataLoadError(f"Unknown 'strings' spec value: {value!r}")
@@ -244,6 +247,8 @@ def _load_products(
         parts += [str(v) for k, v in spec.items() if k not in ("electronics", "string_type")]
         if spec.get("string_type"):
             parts.append(STRING_TYPE_TERMS[spec["string_type"]])
+        if spec.get("electronics"):
+            parts.append(ELECTRONICS_TERMS)
         search_text.append(normalize_text(" ".join(parts)))
     df["search_text"] = search_text
 
