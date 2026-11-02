@@ -9,9 +9,15 @@ Prices are returned as numbers; formatting as "R$ 1.234,90" is the agent's job.
 from __future__ import annotations
 
 import difflib
+import functools
+import json
 import re
-from datetime import date
+import uuid
+from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
+from pathlib import Path
+
+import holidays
 
 from emporio_agent.data import StoreData, apply_discount, money, normalize_text
 from emporio_agent.policies import SECTION_NOTES, TOPICS, PolicyManual
@@ -474,6 +480,307 @@ def get_order_status(store: StoreData, order_id, contact: str, today: date) -> d
         "notes": order["notes"],
         **delay,
         "suggest_handoff": delay["late"],
+    }
+
+
+# --- Returns and exchanges (manual, section 4) -------------------------------
+
+RETURN_REASONS = ("regret", "defect", "preference")
+REGRET_DAYS = 7  # after receipt (4.1)
+DEFECT_DAYS = 30  # after purchase (4.2)
+PREFERENCE_DAYS = 7  # 4.3 does not say from when; counted from receipt, like regret
+LEGAL_WARRANTY_DAYS = 90  # after receipt (8.1)
+
+# 4.4: the data has no marker for these, so the agent must ask instead of assuming.
+RETURN_EXCLUSIONS = [
+    "Instruments with customization or made-to-order adjustments (setup, special regulation).",
+    "Products bought in clearance sales marked as 'final sale'.",
+    "Mouthpieces of wind instruments (hygiene).",
+]
+
+_RETURN_CONDITIONS = {
+    "regret": [
+        "Original packaging, no signs of use, with all accessories and manuals.",
+        "Refund in the original payment method within 10 business days.",
+        "Return shipping is paid by the store.",
+    ],
+    "defect": [
+        "Manufacturing defects only; misuse, falls, excessive humidity or unauthorized "
+        "modifications are not covered.",
+    ],
+    "preference": [
+        "Product in perfect condition and in the original packaging.",
+        "Subject to availability of the desired product.",
+        "Price differences are charged or refunded.",
+    ],
+}
+
+
+def _window(start: date, days: int, today: date) -> dict:
+    deadline = start + timedelta(days=days)
+    remaining = (deadline - today).days
+    return {
+        "eligible": remaining >= 0,
+        "deadline": deadline.isoformat(),
+        "days_remaining": max(remaining, 0),
+        "days_past_deadline": max(-remaining, 0),
+    }
+
+
+def check_return_eligibility(
+    store: StoreData, order_id, contact: str, reason: str, today: date
+) -> dict:
+    """Deterministic return/exchange eligibility for a verified order (manual, section 4)."""
+    if reason not in RETURN_REASONS:
+        return _error(f"reason must be one of {list(RETURN_REASONS)}.")
+    verified = verify_order_owner(store, order_id, contact)
+    if verified is None:
+        return _error(ORDER_NOT_VERIFIED, verified=False)
+    order, customer = verified
+    base = {
+        "verified": True,
+        "customer_first_name": customer["first_name"],
+        "order_id": int(order["order_id"]),
+        "order_status": order["status_label"],
+        "reason": reason,
+    }
+
+    if order["status"] == "cancelled":
+        return {**base, "eligible": False, "message": "The order is already cancelled.",
+                "notes": order["notes"]}
+    if order["status"] != "delivered" or order["estimated_delivery"] is None:
+        # The manual does not cover cancelling or returning an order before delivery.
+        return {
+            **base,
+            "eligible": None,
+            "requires_human": True,
+            "message": "The order has not been delivered yet; the policy does not cover this "
+                       "case. Offer to hand it to the team (reason: cancellation).",
+        }
+
+    # There is no actual delivery date in the data; the estimated delivery is used.
+    received = order["estimated_delivery"]
+    start = order["order_date"] if reason == "defect" else received
+    days = {"regret": REGRET_DAYS, "defect": DEFECT_DAYS, "preference": PREFERENCE_DAYS}[reason]
+    result = {
+        **base,
+        **_window(start, days, today),
+        "window": f"{days} calendar days after {'purchase' if reason == 'defect' else 'receipt'}",
+        "order_date": order["order_date"].isoformat(),
+        "receipt_date_assumed": received.isoformat(),
+        "receipt_date_note": "Estimated delivery date used as the receipt date; ask the "
+                             "customer if they received it on another day.",
+        "conditions": _RETURN_CONDITIONS[reason],
+        "exclusions_to_check_with_customer": RETURN_EXCLUSIONS,
+    }
+    if reason == "defect" and not result["eligible"]:
+        legal = _window(received, LEGAL_WARRANTY_DAYS, today)
+        result["after_exchange_window"] = {
+            "legal_warranty": {"covered": legal["eligible"], "until": legal["deadline"]},
+            "manufacturer_warranty": "6 months to 2 years depending on the manufacturer; "
+                                     "see the product's warranty certificate.",
+            "store_can_intermediate": True,
+        }
+    if result["eligible"]:
+        result["next_step"] = "Offer to hand the request to the team to start the process."
+    return result
+
+
+# --- Shipping (manual, section 5) --------------------------------------------
+
+LOCAL_CITIES = ("campo grande",)  # the manual does not list the metropolitan region's cities
+FREE_SHIPPING_ABOVE = 500.0
+LOCAL_SHIPPING_FEE = 35.0
+CARRIERS = [
+    {"service": "PAC (Correios)", "estimated_business_days": "5 a 12"},
+    {"service": "SEDEX (Correios)", "estimated_business_days": "2 a 5"},
+    {"service": "Jadlog (.package)", "estimated_business_days": "3 a 8"},
+]
+
+
+def _is_large(product: dict) -> bool:
+    """Acoustic drum kits, digital pianos, acoustic double basses (manual 5.2)."""
+    name = normalize_text(product["name"])
+    return (
+        (product["category_id"] == 3 and "acustica" in name)
+        or (product["category_id"] == 4 and "piano" in name)
+        or (product["category_id"] == 8 and "contrabaixo" in name)
+    )
+
+
+def get_shipping_options(
+    store: StoreData, city: str, order_value: float, product_ids: list[int] | None = None
+) -> dict:
+    """Delivery options and costs. Outside Campo Grande the cost depends on the CEP,
+    so no value is returned for it."""
+    if not city or not city.strip():
+        return _error("city is required.")
+    if order_value is None or order_value < 0:
+        return _error("order_value must not be negative.")
+
+    products = {int(p["product_id"]): p for p in _products(store)}
+    unknown = [pid for pid in product_ids or [] if pid not in products]
+    if unknown:
+        return _error(f"Unknown product ids: {unknown}.")
+    large = [products[pid]["name"] for pid in product_ids or [] if _is_large(products[pid])]
+
+    common = {
+        "city": city.strip(),
+        "order_value": money(order_value),
+        "damaged_on_arrival": "Refuse the delivery and contact the store immediately.",
+    }
+    if large:
+        common["special_freight"] = {
+            "products": large,
+            "note": "Large instruments may need special freight with an individual quote; "
+                    "offer to hand it to the team.",
+        }
+
+    if normalize_text(city) in LOCAL_CITIES:
+        free = order_value > FREE_SHIPPING_ABOVE
+        return {
+            **common,
+            "region": "Campo Grande",
+            "options": [{
+                "service": "Motoboy da loja",
+                "price": 0.0 if free else LOCAL_SHIPPING_FEE,
+                "free_shipping": free,
+                "estimated_business_days": "1 a 3",
+                "note": "The customer is called before the delivery.",
+            }],
+        }
+    return {
+        **common,
+        "region": "other cities",
+        "options": [{**c, "price": None, "tracking": True, "insurance": True} for c in CARRIERS],
+        "price_note": "Calculated from the destination CEP, weight and dimensions at checkout; "
+                      "do not quote a value.",
+    }
+
+
+# --- Store hours (manual, section 2) -----------------------------------------
+
+# Campo Grande has had no daylight saving time since 2019: a fixed UTC-4 offset
+# avoids depending on the IANA database (not bundled with Python on Windows).
+STORE_TZ = timezone(timedelta(hours=-4), "America/Campo_Grande")
+OPENING_HOURS = {  # weekday() -> (open, close); Sunday closed
+    0: (time(9), time(18)), 1: (time(9), time(18)), 2: (time(9), time(18)),
+    3: (time(9), time(18)), 4: (time(9), time(18)), 5: (time(9), time(13)),
+}
+WEEKDAYS_PT = ("segunda-feira", "terça-feira", "quarta-feira", "quinta-feira",
+               "sexta-feira", "sábado", "domingo")
+
+
+@functools.lru_cache(maxsize=8)
+def _holiday_calendar(year: int) -> holidays.HolidayBase:
+    # National + Mato Grosso do Sul holidays; municipal holidays are not covered.
+    return holidays.Brazil(subdiv="MS", years=year)
+
+
+def _holiday(day: date) -> str | None:
+    return _holiday_calendar(day.year).get(day)
+
+
+def _hours(day: date) -> tuple[time, time] | None:
+    if _holiday(day):
+        return None
+    return OPENING_HOURS.get(day.weekday())
+
+
+def get_store_status(now: datetime) -> dict:
+    """Whether the store (and WhatsApp team) is open now and, if not, when it reopens."""
+    now = now.astimezone(STORE_TZ) if now.tzinfo else now.replace(tzinfo=STORE_TZ)
+    today = now.date()
+    hours = _hours(today)
+    is_open = bool(hours) and hours[0] <= now.time() < hours[1]
+    result = {
+        "now": now.strftime("%Y-%m-%d %H:%M"),
+        "weekday": WEEKDAYS_PT[today.weekday()],
+        "timezone": "America/Campo_Grande (UTC-4)",
+        "is_open": is_open,
+        "today_hours": f"{hours[0]:%H:%M} às {hours[1]:%H:%M}" if hours else None,
+        "holiday": _holiday(today),
+        "special_dates_note": "Hours may be extended on special dates (Black Friday, store "
+                              "anniversary, Christmas), announced on social media.",
+    }
+    if is_open:
+        result["closes_at"] = f"{hours[1]:%H:%M}"
+        return result
+
+    day = today if hours and now.time() < hours[0] else today + timedelta(days=1)
+    while _hours(day) is None:
+        day += timedelta(days=1)
+    result["next_opening"] = {
+        "date": day.isoformat(),
+        "weekday": WEEKDAYS_PT[day.weekday()],
+        "time": f"{_hours(day)[0]:%H:%M}",
+    }
+    return result
+
+
+# --- Handoff to the team (manual, section 7.3) -------------------------------
+
+HANDOFF_REASONS = (
+    "complaint", "purchase_intent", "late_order", "cancellation",
+    "data_deletion", "unanswered", "other",
+)
+HANDOFF_RESPONSE_TIME = "até 24 horas úteis"
+MAX_SUMMARY_CHARS = 1000
+
+
+def register_handoff(
+    store: StoreData,
+    path: Path,
+    reason: str,
+    summary: str,
+    now: datetime,
+    contact: str | None = None,
+    order_id=None,
+    suggested_next_action: str | None = None,
+    tools_consulted: list[str] | None = None,
+) -> dict:
+    """Record a case for a human in a JSONL queue (stand-in for a helpdesk).
+
+    identity_verified is computed here, never taken from the LLM. tools_consulted
+    is filled by the agent loop, so the attendant sees what was already checked.
+    """
+    if reason not in HANDOFF_REASONS:
+        return _error(f"reason must be one of {list(HANDOFF_REASONS)}.")
+    if not summary or not summary.strip():
+        return _error("summary is required.")
+
+    verified = bool(order_id and contact and verify_order_owner(store, order_id, contact))
+    handoff_id = f"H-{now:%Y%m%d%H%M%S}-{uuid.uuid4().hex[:6]}"
+    record = {
+        "handoff_id": handoff_id,
+        "created_at": now.isoformat(timespec="seconds"),
+        "reason": reason,
+        "summary": summary.strip()[:MAX_SUMMARY_CHARS],
+        # Kept unmasked on purpose: the team needs it to call back. The file is
+        # outside git; the traces, unlike this queue, are masked.
+        "contact": contact,
+        "order_id": order_id,
+        "identity_verified": verified,
+        "suggested_next_action": suggested_next_action,
+        "tools_consulted": tools_consulted or [],
+    }
+    try:
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except OSError as exc:
+        return {"error": f"Could not register the handoff: {exc}", "retryable": True}
+
+    status = get_store_status(now)
+    return {
+        "registered": True,
+        "handoff_id": handoff_id,
+        "reason": reason,
+        "identity_verified": verified,
+        "response_time": HANDOFF_RESPONSE_TIME,
+        "team_available_now": status["is_open"],
+        "team_back_at": None if status["is_open"] else status["next_opening"],
     }
 
 

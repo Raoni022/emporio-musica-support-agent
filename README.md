@@ -72,6 +72,18 @@ The full diagnosis, written as a report to hand back to the store, is in [docs/d
 | How a customer proves an order is theirs (manual 9) | Order number + the e-mail (case-insensitive) or phone registered for **that order's** customer. Phone accepts any formatting and the +55 country code, but needs the area code (DDD). Unknown order, wrong contact and malformed input return the **same** message, so the response never reveals whether an order exists |
 | What a verified order lookup returns | Status, date, items, recorded total, payment method, tracking and estimate, notes, and the customer's **first name only** (for the greeting). No e-mail, phone, full name or city: the agent does not need them (data minimization) |
 | When an order counts as late | `shipped` past the estimated delivery, or `pending`/`confirmed` for more than 7 days since the order date. The tool returns `late` and `suggest_handoff`; the same threshold drives the data quality report |
+| Return windows count from the receipt date, but the data has no actual delivery date | `estimated_delivery` is used as the receipt date, and the tool tells the agent to check with the customer. Regret and preference: 7 days after receipt. Defect: 30 days after purchase, then the 90-day legal warranty (from receipt) and the manufacturer's warranty |
+| Section 4.3 gives 7 days for preference exchanges without saying from when | Counted from receipt, like the regret window |
+| Section 4.1 is titled "Compras Online"; the data does not say where each order was placed | All orders in the data are treated as online orders |
+| Returns before delivery (pending, confirmed, shipped) | Not covered by the manual (order 17 shows cancellations do happen): the tool returns `requires_human` and the agent offers a handoff |
+| 4.4 exclusions (customized instruments, "final sale" items, mouthpieces) are not marked in the data | The tool always returns them and the agent asks the customer instead of assuming |
+| "Região metropolitana de Campo Grande" is not defined in the manual | Only the city of Campo Grande gets the local rules |
+| Free local shipping "acima de R$ 500,00" and a fee "abaixo de R$ 500,00": exactly R$ 500 is in neither | Strictly above R$ 500 is free; R$ 500 or less pays R$ 35 |
+| Which products count as "large" (acoustic drums, digital pianos, double basses) | Acoustic drum kits in Baterias, pianos in Teclados, double basses in Cordas Orquestrais. Electric basses ship normally, even though some descriptions call them "contrabaixo" |
+| Holidays | National and Mato Grosso do Sul holidays (`holidays` package). Campo Grande municipal holidays are not covered |
+| Store timezone | Fixed UTC-4 (Campo Grande has had no daylight saving time since 2019); avoids depending on the IANA database, which Python does not bundle on Windows |
+| "Prazo de retorno: 24 horas úteis" | Returned as-is ("até 24 horas úteis"), plus when the team is back if the store is closed now; not converted into a date |
+| Handoff queue contents | `handoffs.jsonl` keeps the customer's contact **unmasked**, since the team needs it to call back; it is outside git. `identity_verified` is computed by the tool, never taken from the LLM |
 
 ## 5b. Where business rules live
 
@@ -87,6 +99,10 @@ Principle: a rule that can be **computed or verified lives in code**; an informa
 | Availability (stock, discontinued, coming soon) | Code | `data.py` (`availability`) | pytest |
 | Order identity verification (LGPD) | Code | `verify_order_owner`, used by `get_order_status` | pytest |
 | Late-order detection | Code | `get_order_status` (`late`, `suggest_handoff`) | pytest |
+| Regret, defect and preference windows; legal warranty | Code | `check_return_eligibility` | pytest |
+| Campo Grande shipping (free above R$ 500, else R$ 35) and special freight for large items | Code | `get_shipping_options` | pytest |
+| Opening hours, holidays and next opening | Code | `get_store_status` | pytest |
+| Who gets handed to a human, and what the attendant receives | Code | `register_handoff` (reasons enum, verified identity, tools consulted) | pytest |
 | Policy text (returns, warranty, privacy...) and which contact to use | Manual | `get_policy` (`text` + `notes`) | pytest |
 
 ## 6. Example conversations
