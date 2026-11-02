@@ -59,6 +59,10 @@ The full diagnosis, written as a report to hand back to the store, is in [docs/d
 | Several promotions for the same product (all inactive today) | Only `is_active == 1` counts; if more than one is active, the largest discount applies (not cumulative) |
 | Customers 11 and 43 share an e-mail | Verification still correct (same e-mail owner); reported as a probable duplicate |
 | Categories 6, 7 and 8 have no products | The agent says so, without inventing items |
+| The manual lists two WhatsApp numbers: (67) 3341-4444 (cover, 1.2) and (67) 3321-4500 (section 7) | Use (67) 3341-4444. `get_policy` returns the section text unchanged plus a `notes` field saying which value to use |
+| The store e-mail appears with an accent in table 1.2 (`empóriodamusica`) | Use `contato@emporiodamusica.com.br` (cover); same `notes` mechanism |
+| The payment table says "minimum installment R$ 100,00" for credit; section 3.1 sets R$ 50 / 80 / 100 by number of installments | Section 3.1 applies; installments are computed by a tool. "No minimum (except below R$ 50,00)" is read as a R$ 50 minimum installment |
+| Section 7.1 says to suggest partner stores, but none are listed | The agent does not name other stores |
 
 ## 5b. Where business rules live
 

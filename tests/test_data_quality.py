@@ -3,9 +3,12 @@ from datetime import date
 import pytest
 
 from emporio_agent.data import load_store_data
+from emporio_agent.policies import load_policy_manual
 from scripts.data_quality import (
     check_description_contradictions,
     check_duplicate_emails,
+    check_manual_contacts,
+    check_manual_installments,
     check_order_totals,
     check_stale_orders,
     mask_email,
@@ -46,8 +49,25 @@ def test_stale_orders_depend_on_reference_date(store):
     assert check_stale_orders(store, date(2026, 2, 21)).findings == []
 
 
-def test_report_has_no_raw_emails(store):
-    report = render(run_checks(store, date(2026, 3, 25)), date(2026, 3, 25))
+@pytest.fixture(scope="module")
+def manual():
+    return load_policy_manual()
+
+
+def test_manual_contact_contradictions_are_found(manual):
+    titles = [f.title for f in check_manual_contacts(manual).findings]
+    assert any("2 different phone" in t for t in titles)
+    assert any("e-mail 2 different ways" in t for t in titles)
+
+
+def test_manual_installment_contradiction_is_found(manual):
+    [finding] = check_manual_installments(manual).findings
+    assert len(finding.evidence) == 4  # table + three tiers of 3.1
+
+
+def test_report_has_no_raw_customer_emails(store, manual):
+    reference_date = date(2026, 3, 25)
+    report = render(run_checks(store, manual, reference_date), reference_date, manual.version)
     assert "@jmail.com" not in report.replace("***@jmail.com", "")
 
 
