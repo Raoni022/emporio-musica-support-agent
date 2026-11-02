@@ -24,7 +24,41 @@ pytest                              # tests, no LLM calls
 python scripts/data_quality.py      # regenerates docs/data_quality.md
 ```
 
+**Configuration (`.env`):**
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `OPENAI_API_KEY` | (required) | Key for OpenAI or any OpenAI-compatible provider. For a local server such as Ollama, any non-empty value |
+| `OPENAI_BASE_URL` | empty (OpenAI) | Any OpenAI-compatible endpoint, e.g. Gemini `https://generativelanguage.googleapis.com/v1beta/openai/`, Groq `https://api.groq.com/openai/v1`, Ollama `http://localhost:11434/v1` |
+| `MODEL` | `gpt-4.1-mini` | Model name as the provider expects it |
+| `REFERENCE_DATE` | empty (real time) | Fixed "now" (`YYYY-MM-DD`, 10:00 assumed, or `YYYY-MM-DDTHH:MM`). The data ends in March 2026; with the real date every delivered order is outside any return window, so examples and tests use `2026-03-25T10:00` |
+| `STRICT_TOOLS` | `true` | Set `false` for providers that reject strict tool schemas; arguments are validated in code either way |
+
 ## 3. Architecture
+
+```
+customer message
+      │
+      ▼
+ Agent.respond  ── length check (2,000 chars) ──► fixed reply, no LLM call
+      │
+      ▼  system prompt (persona + behavior + current store time) + session history
+ LLM (function calling) ◄────────────────────────────┐
+      │ tool calls (one or several in parallel)      │ results as JSON
+      ▼                                              │
+ validate arguments ─► tools.py (pure functions) ────┘
+                         ├─ data.py      CSVs, normalized at load
+                         ├─ policies.py  manual split into 10 sections (get_policy)
+                         └─ handoffs.jsonl  queue for the human team
+      │
+      ▼  no more tool calls
+ answer  (or a fixed fallback message on any failure)
+```
+
+- **`agent.py`**: the loop (decide → act → observe), at most 5 LLM calls and ~60 s per customer message. All tool calls in one model response run before the next LLM call.
+- **`llm.py`**: the only module that imports `openai`; timeouts and retries come from the SDK. `FakeLLM` replays scripted responses so the loop is tested without an API.
+- **`tool_schemas.py`**: strict JSON schemas; each description says *when* to use the tool. The category enum is built from the data.
+- **`prompts.py`**: persona and behavior only, plus the fixed fallback messages.
 
 ## 4. Technical decisions and why
 
@@ -84,6 +118,8 @@ The full diagnosis, written as a report to hand back to the store, is in [docs/d
 | Store timezone | Fixed UTC-4 (Campo Grande has had no daylight saving time since 2019); avoids depending on the IANA database, which Python does not bundle on Windows |
 | "Prazo de retorno: 24 horas úteis" | Returned as-is ("até 24 horas úteis"), plus when the team is back if the store is closed now; not converted into a date |
 | Handoff queue contents | `handoffs.jsonl` keeps the customer's contact **unmasked**, since the team needs it to call back; it is outside git. `identity_verified` is computed by the tool, never taken from the LLM |
+| A customer message longer than 2,000 characters | Not sent to the LLM: a fixed reply asks the customer to summarize (cost and abuse protection) |
+| Languages inside the system | The prompt and tool descriptions are in Portuguese (the agent talks to Brazilian customers); tool results are in English, as structured data the model reads; customer-facing fixed messages are in Portuguese |
 
 ## 5b. Where business rules live
 
@@ -103,6 +139,8 @@ Principle: a rule that can be **computed or verified lives in code**; an informa
 | Campo Grande shipping (free above R$ 500, else R$ 35) and special freight for large items | Code | `get_shipping_options` | pytest |
 | Opening hours, holidays and next opening | Code | `get_store_status` | pytest |
 | Who gets handed to a human, and what the attendant receives | Code | `register_handoff` (reasons enum, verified identity, tools consulted) | pytest |
+| When to consult data vs. policies | Tool descriptions + prompt | `tool_schemas.py`, `prompts.py` | eval |
+| Persona, tone, flow, scope, handoff, security | Prompt | `prompts.py` | examples + eval |
 | Policy text (returns, warranty, privacy...) and which contact to use | Manual | `get_policy` (`text` + `notes`) | pytest |
 
 ## 6. Example conversations
@@ -110,6 +148,20 @@ Principle: a rule that can be **computed or verified lives in code**; an informa
 ## 7. Observability
 
 ## 7b. Failure handling
+
+Principle: the customer always gets an answer and the agent never guesses. Every failure ends in a defined behavior (tested with `FakeLLM` in `tests/test_agent.py`).
+
+| Situation | Behavior |
+|---|---|
+| LLM slow, timeout, rate limit (429), provider down (5xx) | The SDK retries twice with exponential backoff (30 s timeout); then a **fixed fallback message, no LLM**, with the store's WhatsApp, e-mail and hours |
+| Empty answer from the model | Same fixed fallback |
+| A tool raises (file, bug, integration) | Becomes `{"error": ..., "retryable": true}` for the model to explain; the turn continues |
+| Unknown tool, invalid JSON or arguments outside the schema | Structured error back to the model, which can correct itself |
+| Tool loop or slow turn | At most 5 LLM calls and ~60 s per message; then an apology and an offer to hand off |
+| Message over 2,000 characters | Fixed reply asking to summarize |
+| Missing or invalid configuration | Clear error at startup (`ConfigError`) |
+
+After an LLM failure, the partial tool exchange of that turn is dropped from history (the customer's message stays), so the next request never carries an orphan tool call.
 
 ## 8. Known limitations and what I'd do with more time
 
