@@ -98,7 +98,9 @@ class Agent:
             "get_product_details": lambda a: tools.get_product_details(store, a["product"]),
             "list_categories": lambda a: tools.list_categories(store),
             "list_active_promotions": lambda a: tools.list_active_promotions(store),
-            "calculate_installments": lambda a: tools.calculate_installments(a["amount"]),
+            "calculate_installments": lambda a: tools.calculate_installments(
+                a.get("amount"), store=store, product=a.get("product")
+            ),
             "get_order_status": lambda a: tools.get_order_status(
                 store, a["order_id"], a["contact"], today
             ),

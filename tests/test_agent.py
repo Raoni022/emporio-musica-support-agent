@@ -278,7 +278,8 @@ def test_category_enum_comes_from_the_data(store):
         ({"amount": 99.9}, True),
         ({"amount": True}, False),  # bool is not a number
         ({"amount": "100"}, False),
-        ({}, False),
+        ({"product": 95}, False),  # product is a string
+        ({"product": "Crafter HT-100", "amount": None}, True),
         ({"amount": 100, "extra": 1}, False),
     ],
 )

@@ -76,10 +76,15 @@ def build_tool_schemas(store: StoreData) -> list[dict]:
               "Lista as promoções ativas agora. Use para \"tem alguma promoção?\"."),
         _tool(
             "calculate_installments",
-            "Opções de parcelamento sem juros no cartão para um valor, com as parcelas "
-            "mínimas da loja, e se é possível combinar formas de pagamento. Passe o preço "
-            "final (promocional, se houver). Nunca calcule parcelas por conta própria.",
-            {"amount": {"type": "number"}},
+            "Opções de parcelamento sem juros no cartão, com as parcelas mínimas da loja, e "
+            "se é possível combinar formas de pagamento. Para um produto, passe product "
+            "(nome ou id): a ferramenta busca o preço final sozinha, então pode ser chamada "
+            "junto com get_product_details. Use amount só para outros valores (ex.: soma de "
+            "itens). Nunca calcule parcelas por conta própria.",
+            {
+                "product": _nullable({"type": "string"}),
+                "amount": _nullable({"type": "number"}),
+            },
         ),
         _tool(
             "get_order_status",

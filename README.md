@@ -34,6 +34,10 @@ python scripts/data_quality.py      # regenerates docs/data_quality.md
 | `REFERENCE_DATE` | empty (real time) | Fixed "now" (`YYYY-MM-DD`, 10:00 assumed, or `YYYY-MM-DDTHH:MM`). The data ends in March 2026; with the real date every delivered order is outside any return window, so examples and tests use `2026-03-25T10:00` |
 | `STRICT_TOOLS` | `true` | Set `false` for providers that reject strict tool schemas; arguments are validated in code either way |
 
+The `.env` file wins over variables already set in the system (an old `OPENAI_API_KEY` in the environment would otherwise be used silently).
+
+**Tested for real:** OpenAI `gpt-4.1-mini` with strict schemas on. Other providers are supported through `OPENAI_BASE_URL` but were not run end to end.
+
 ## 3. Architecture
 
 ```
@@ -102,7 +106,7 @@ The full diagnosis, written as a report to hand back to the store, is in [docs/d
 | Customers write product names loosely ("GD-20", "takamini") | Name lookup ignores separators and tolerates typos word by word; a typo match is flagged `approximate_match` so the agent confirms with the customer. Several matches return candidates instead of a guess |
 | Installment minimums (3.1) say nothing about paying in a single installment | 1x on credit is always allowed; the R$ 50 / 80 / 100 minimums apply from 2x on |
 | Splitting an amount into installments rarely gives whole cents (R$ 1.967,18 ÷ 10) | Each installment is rounded to the cent (half up, using `Decimal`); the total shown is always the exact amount. In practice the card operator absorbs the cents in one installment |
-| Installments for a promoted product | The agent passes the final price to `calculate_installments`; the tool does not look up products, so it works for any amount (e.g. two items together) |
+| Installments for a product | `calculate_installments` takes the **product** and looks up its final price itself (promotional when active). In the first real run the model called it in parallel with `get_product_details` and passed the previous product's price; now it never needs to know the price first. `amount` remains for other values (e.g. two items together) |
 | How a customer proves an order is theirs (manual 9) | Order number + the e-mail (case-insensitive) or phone registered for **that order's** customer. Phone accepts any formatting and the +55 country code, but needs the area code (DDD). Unknown order, wrong contact and malformed input return the **same** message, so the response never reveals whether an order exists |
 | What a verified order lookup returns | Status, date, items, recorded total, payment method, tracking and estimate, notes, and the customer's **first name only** (for the greeting). No e-mail, phone, full name or city: the agent does not need them (data minimization) |
 | When an order counts as late | `shipped` past the estimated delivery, or `pending`/`confirmed` for more than 7 days since the order date. The tool returns `late` and `suggest_handoff`; the same threshold drives the data quality report |

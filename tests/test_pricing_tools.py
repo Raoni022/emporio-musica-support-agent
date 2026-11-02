@@ -76,6 +76,28 @@ def test_invalid_amount_returns_structured_error(amount):
     assert calculate_installments(amount)["retryable"] is False
 
 
+def test_installments_for_a_product_use_its_final_price(store):
+    # Real run: the model passed the previous product's price (2199) for the Crafter.
+    result = calculate_installments(store=store, product="Crafter HT-100")
+    assert result["amount"] == 1967.18  # promotional price, not the list price
+    assert result["price_basis"]["product"] == "Crafter HT-100 Folk Aço Natural"
+    assert result["price_basis"]["promotion"]["discount_percent"] == 18
+    options = {o["installments"]: o["installment_value"] for o in result["options"]}
+    assert options[10] == 196.72
+
+
+def test_product_wins_over_a_wrong_amount(store):
+    assert calculate_installments(2199, store=store, product="Crafter HT-100")["amount"] == 1967.18
+
+
+def test_installments_for_an_ambiguous_product_return_candidates(store):
+    assert calculate_installments(store=store, product="Kala tenor")["ambiguous"] is True
+
+
+def test_installments_for_an_unknown_product_return_an_error(store):
+    assert "error" in calculate_installments(store=store, product="Fender Precision")
+
+
 # --- Promotions --------------------------------------------------------------
 
 
