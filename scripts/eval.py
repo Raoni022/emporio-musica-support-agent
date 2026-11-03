@@ -2,7 +2,8 @@
 
 Each case starts a fresh session (optionally at its own reference date),
 sends the customer messages in order and checks, deterministically:
-- expected_tools: every listed tool was called at some point in the case;
+- expected_tools: every listed tool was called at some point in the case (an
+  item that is a list passes if any of its tools was called);
 - must_contain: every item appears in the final answer (an item that is a list
   passes if any of its alternatives appears);
 - must_not_contain: none of these appear in any answer of the case.
@@ -62,7 +63,8 @@ def check_case(case: dict, answers: list[str], tools: list[str]) -> list[str]:
     """Deterministic checks for one case. Returns the failures (empty = pass)."""
     failures = []
     for tool in case.get("expected_tools", []):
-        if tool not in tools:
+        options = tool if isinstance(tool, list) else [tool]
+        if not any(option in tools for option in options):
             failures.append(f"tool not called: {tool}")
     final = normalize_text(answers[-1]) if answers else ""
     for item in case.get("must_contain", []):

@@ -40,6 +40,12 @@ def test_forbidden_text_is_checked_in_every_answer():
     assert check_case(case, ["Olá, Isabela!", "Tudo certo."], []) != []
 
 
+def test_a_list_of_tools_passes_if_any_was_called():
+    case = {"expected_tools": [["get_product_details", "search_products"]]}
+    assert check_case(case, ["ok"], ["search_products"]) == []
+    assert check_case(case, ["ok"], ["get_policy"]) != []
+
+
 # --- Dataset sanity ----------------------------------------------------------
 
 
@@ -68,7 +74,8 @@ def test_brief_questions_are_in_the_dataset_verbatim(cases):
 def test_every_tool_is_expected_at_least_once(cases):
     store = load_store_data()
     tool_names = {s["function"]["name"] for s in build_tool_schemas(store)}
-    expected = {t for c in cases for t in c["expected_tools"]}
+    expected = {t for c in cases for item in c["expected_tools"]
+                for t in (item if isinstance(item, list) else [item])}
     assert tool_names <= expected
 
 

@@ -21,11 +21,11 @@ How it works, in one paragraph: a plain function-calling loop (ReAct style, no f
 
 | Measured on this prototype (`gpt-4.1-mini`) | Result |
 |---|---|
-| Golden dataset (27 cases, deterministic checks) | **80/81 over the last three runs** (27, 27, 26) ([evals/last_run.md](evals/last_run.md) is the last one) |
+| Golden dataset (27 cases, deterministic checks) | **79/81 over the last three runs** (27, 26, 26; both misses are the same known case, section 8) ([evals/last_run.md](evals/last_run.md) is the last one) |
 | Average cost per customer message | ~US$ 0.002 |
 | Median latency per customer message | ~2.3 s |
 | Output guardrail triggers in the eval | 0 |
-| Unit tests (no LLM) | 290 passing |
+| Unit tests (no LLM) | 293 passing |
 
 ## 1b. Problem & scope
 
@@ -204,7 +204,9 @@ What the iterations showed:
 - **Instructions next to the data beat instructions in the prompt.** Rules stated only in the prompt or tool descriptions were followed inconsistently (say the total of a truncated search, show the original price and the %, show alternatives instead of offering them, give the deadline date, don't guess a name from the e-mail). Each became stable once the **tool result** carried it: an `instruction` field next to the data, ready-made `display` text for promotions (`de R$ 2.399,00 por R$ 1.967,18 (18% de desconto)`), `deadline_display` for return windows.
 - **A fix can break another case.** Telling the agent not to re-ask for data it already had made it ask for "confirmation" when the e-mail came in a second message; the wording had to say that one contact is enough and that verifying is the tool's job.
 
-**Manual testing found what the eval did not cover.** A CLI session with tricky questions surfaced 8 more problems: two products in 6x answered as impossible (the model read `can_combine_payments`, about payment *methods*, as combining *items*), "PIX in 3x" accepted, saxophones implied for an empty category, return rules answered from memory, invented Black Friday dates and an offer to "let you know" (the agent cannot send messages later), a cancellation registered without verification, and an English question answered in Portuguese. Fixes followed the same rule: computed in code where possible (`calculate_installments` now adds several products itself and says installments are credit-card only), pointed to the right manual section (`notes`), and, for the language, **detected in code** and stated to the model for that turn instead of relying on the prompt. Each became an eval case; the result is 80/81 over the last three runs.
+**Manual testing found what the eval did not cover.** A CLI session with tricky questions surfaced 8 more problems: two products in 6x answered as impossible (the model read `can_combine_payments`, about payment *methods*, as combining *items*), "PIX in 3x" accepted, saxophones implied for an empty category, return rules answered from memory, invented Black Friday dates and an offer to "let you know" (the agent cannot send messages later), a cancellation registered without verification, and an English question answered in Portuguese. Fixes followed the same rule: computed in code where possible (`calculate_installments` now adds several products itself and says installments are credit-card only), pointed to the right manual section (`notes`), and, for the language, **detected in code** and stated to the model for that turn instead of relying on the prompt. Each became an eval case; the result was 80/81 over the next three runs.
+
+**A final review run found one more.** "Tem o Giannini GF-3D?" failed once: the model searched the name instead of looking the product up, the search returned only a count of unavailable matches, and no alternatives were offered. A search that finds only unavailable products now returns them with their alternatives and the same instruction, and the case accepts either tool (5/5 runs of that case afterwards). The last three full runs: 79/81, both misses in `custom_setup_exclusion` (section 8).
 
 ### Retrieval architecture
 
@@ -260,7 +262,7 @@ The full diagnosis, written as a report to hand back to the store, is in [docs/d
 | The payment table says "minimum installment R$ 100,00" for credit; section 3.1 sets R$ 50 / 80 / 100 by number of installments | Section 3.1 applies; installments are computed by a tool. "No minimum (except below R$ 50,00)" is read as a R$ 50 minimum installment |
 | Section 7.1 says to suggest partner stores, but none are listed | The agent does not name other stores |
 | The brief asks for products "up to R$ X" but does not say whether that is the list or the promotional price | Search filters and sorts by the **final price** (promotional price when a promotion is active), i.e. what the customer pays. List price, discount and final price are always returned together |
-| Manual 7.3 asks for "similar alternatives" to unavailable products without defining similar | Up to 3 available products from the same category (and same string type when applicable), with a final price within ±30% of the original; if none fall in that band, the closest prices in the category |
+| Manual 7.3 asks for "similar alternatives" to unavailable products without defining similar | Up to 3 available products from the same category (and same string type when applicable), with a final price within ±30% of the original; if none fall in that band, the closest prices in the category. Returned by `get_product_details` and also by `search_products` when a search finds only unavailable products (in an eval run the model searched an out-of-stock guitar by name, got only a count back and offered no alternatives) |
 | Customers use words that are not in product names ("violão clássico", "folk", "eletroacústico") | The search text also carries Portuguese terms derived from the specs: nylon → "clássico", steel → "aço folk", with electronics → "eletroacústico". If the free-text words match nothing but the structured filters do, the search returns the filter results with `query_relaxed` instead of zero. Found in a real run, where the agent told a customer there were no classical guitars (there are 15) |
 | Customers write product names loosely ("GD-20", "takamini") | Name lookup ignores separators and tolerates typos word by word; a typo match is flagged `approximate_match` so the agent confirms with the customer. Several matches return candidates instead of a guess |
 | Installment minimums (3.1) say nothing about paying in a single installment | 1x on credit is always allowed; the R$ 50 / 80 / 100 minimums apply from 2x on |
@@ -380,7 +382,7 @@ After an LLM failure, the partial tool exchange of that turn is dropped from his
 
 ## 8. Known limitations and what I'd do with more time
 
-- **Return exclusions are not always raised.** `check_return_eligibility` always returns the section 4.4 exclusions (customized instruments, "final sale" items, mouthpieces), which the data does not mark, but the agent does not always ask the customer about them (it did not in example 03). Asked directly "can I exchange a guitar with a made-to-order setup?", it answers from the policy in most runs but sometimes asks for the order first (the only eval miss in the last three runs). Next step: an `instruction` next to the data, as for the other rules.
+- **Return exclusions are not always raised.** `check_return_eligibility` always returns the section 4.4 exclusions (customized instruments, "final sale" items, mouthpieces), which the data does not mark, but the agent does not always ask the customer about them (it did not in example 03). Asked directly "can I exchange a guitar with a made-to-order setup?", it answers from the policy in most runs but sometimes asks for the order first (the only eval miss in the last three runs, twice). Next step: an `instruction` next to the data, as for the other rules.
 - **Language detection is a word-count heuristic** for Portuguese vs. English only. Other languages fall back to the prompt rule. Next step: a small language-identification library, if the store gets foreign customers.
 - **Redundant tool calls.** Asked "is any of these on sale?" right after a search, the model still looks up each product one by one (8 calls), although the search results already carry the promotion. The answer is right, but the turn costs about twice as much. Next step: an eval case that checks the number of calls, then either a tool that answers about several products at once or a per-turn call budget.
 - **Order verification can be guessed by brute force.** Order numbers are sequential and there is no limit on failed attempts per session. In production: lock or slow down after a few failures per phone number, and alert on many failures.
@@ -414,7 +416,7 @@ What I decided and checked, not the assistant:
 
 - the architecture, the business rules and every assumption in section 5. When Claude Code made a choice the spec did not cover, it had to flag it, I validated it by committing or objected before committing, and it went into the README in the same commit;
 - testing it myself, which mattered most: my own CLI session and the first real runs found bugs that 200+ unit tests with a fake LLM could not (an empty `OPENAI_BASE_URL`, an old API key in my system environment overriding `.env`, installments computed with the previous product's price, a search that told a customer there were no classical guitars). Each became its own `fix:` commit;
-- the eval as the measure for every behavior fix, reported with its failing runs and not only the best one (80/81 over the last three runs of 27 cases);
+- the eval as the measure for every behavior fix, reported with its failing runs and not only the best one (79/81 over the last three runs of 27 cases);
 - these documents and the example conversations, which are single unedited runs.
 
 The decision log's "Implementation" section lists the points where I questioned or changed what was generated.

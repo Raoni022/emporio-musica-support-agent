@@ -60,6 +60,22 @@ def test_unavailable_matches_are_counted(store):
     assert result["unavailable_matches"] == 1
 
 
+def test_search_for_one_unavailable_product_brings_its_alternatives(store):
+    result = search_products(store, query="Giannini GF-3D")
+    assert [p["product_id"] for p in result["unavailable_products"]] == [96]
+    assert result["unavailable_products"][0]["availability"] == "out_of_stock"
+    assert result["alternatives"]
+    assert all(p["availability"] == "available" for p in result["alternatives"])
+    assert "list these alternatives" in result["instruction"]
+
+
+def test_search_with_available_results_adds_no_unavailable_details(store):
+    result = search_products(store, category="Violões", max_price=1000)
+    assert result["unavailable_matches"] == 2
+    assert "unavailable_products" not in result
+    assert "alternatives" not in result
+
+
 def test_category_and_query_ignore_accents_and_plurals(store):
     assert search_products(store, category="violao")["total_count"] == 33
     assert search_products(store, category="VIOLÕES")["total_count"] == 33

@@ -84,3 +84,7 @@ Claude Code implemented the spec one step per commit; I reviewed each step, ran 
 - My own CLI sessions with tricky questions found 8 problems the eval did not cover: two products in 6x answered as impossible, "PIX in 3x" accepted, saxophones implied for an empty category, return rules answered from memory, invented Black Friday dates and an offer to notify me later, a cancellation registered without verification, and an English question answered in Portuguese.
 - Changed: installments for several products computed in code; manual notes pointing to the right section; prompt rules for catalog and policy checks; language detected in code per turn. Each problem became an eval case (20 → 27 cases, above the 15–20 planned), with 80/81 over the last three runs.
 - Why: the eval only measures what it contains. Testing it like a customer would was what found these.
+
+**20. Final review before submission.**
+- A full review from a fresh clone (README only, pytest on Python 3.11 and 3.14, the eval, the brief's questions and the data traps) found no blocker, and one real failure: "Tem o Giannini GF-3D?" answered without alternatives when the model searched the name instead of looking the product up.
+- Changed: a search that finds only unavailable products now returns them with their alternatives; the eval case accepts either tool. Reported as 79/81 over the last three runs, with both misses in the case already listed as a limitation.

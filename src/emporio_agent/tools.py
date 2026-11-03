@@ -252,6 +252,23 @@ def search_products(
     if not include_unavailable and unavailable:
         # Lets the agent say "it exists but is out of stock" instead of "not found".
         result["unavailable_matches"] = len(unavailable)
+        if not matches:
+            # Said next to the data: in eval runs the model searched an out-of-stock
+            # product by name, got only a count back and offered no alternatives (7.3).
+            result["unavailable_products"] = [_summary(p) for p in unavailable[:MAX_CANDIDATES]]
+            if len(unavailable) == 1:
+                result["alternatives"] = _alternatives(store, unavailable[0])
+            if result.get("alternatives"):
+                result["instruction"] = (
+                    "The product is not available. In this same answer, say so and list "
+                    "these alternatives with name and final price; do not ask whether to "
+                    "show them."
+                )
+            else:
+                result["instruction"] = (
+                    "None of the matching products is available. Say so, and call "
+                    "get_product_details for the one the customer wants to see alternatives."
+                )
     if result["truncated"]:
         # Said next to the data: in a real eval run the model listed 8 of 12 options
         # without saying there were more, although the tool description asks for it.
